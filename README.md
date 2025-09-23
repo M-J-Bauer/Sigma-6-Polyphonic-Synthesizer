@@ -12,19 +12,19 @@ Download and install the latest version of Arduino IDE on your PC and follow the
 
 [Arduino IDE Setup](https://learn.adafruit.com/introducing-itsy-bitsy-m0/setup)
 
-Regardless of the board type you're using, Adafruit or Robotdyn, install the Adafruit SAMDxx Boards Manager. When you connect
-the board to your computer, Arduino may determine the board type automatically, but in any case be sure to select board
-type 'Adafruit ItsyBitsy M0 Express (SAMD21)' to ensure that the firmware will compile with the correct library functions.
+Install the Adafruit SAMDxx Boards Manager. When you connect
+the board to your computer, Arduino should determine the board type automatically, but in any case be sure to select board
+type 'Adafruit ItsyBitsy M0 Express (SAMD21)' to ensure that the firmware will compile with compatible library functions.
 
-To build the Sigma-6 Poly VOICE module firmware, you also need to install a "fast timer" library in the Arduino IDE.
+To build the __Sigma-6 Poly VOICE module__ firmware, you also need to install a "fast timer" library in the Arduino IDE.
 Open the Arduino Library Manager. From the 'Type' drop-down list, choose 'All'. In the 'Filter' box, write "fast_samd21_tc"
 and click 'INSTALL'. Then choose Type = "Installed". The library should then appear in your Arduino IDE as in this screen-shot:
 
 ![Screenshot_SAMD21_fast_timer_library](https://github.com/user-attachments/assets/398ecf9a-11e7-4b22-b53f-e896f9cf998e)
 
-Steps to compile and "upload" the Sigma-6 Poly VOICE module firmware:
+Steps to compile and "upload" the __Sigma-6 Poly VOICE module__ firmware:
 
-    > Download the __Sigma-6 Poly-voice__ source files from the repository here.
+    > Download the Sigma-6 Poly-voice source files from the repository here.
     > Create a project folder in your computer local drive named "Sigma_6_Poly_voice".
     > Copy the downloaded source files into the project folder.
     > Double-click on the file "Sigma_6_Poly_voice.ino" -- this should open Arduino IDE and load
@@ -32,9 +32,9 @@ Steps to compile and "upload" the Sigma-6 Poly VOICE module firmware:
       source file "Sigma_6_Poly_voice.ino".)
     > Compile the code and upload the firmware to each of the Sigma-6 Voice MCU's.^
 
-Steps to compile and "upload" the Sigma-6 Poly MASTER controller firmware:
+Steps to compile and "upload" the __Sigma-6 Poly MASTER controller__ firmware:
 
-    > Download the __Sigma_6_Poly_master__ source files from the repository here.
+    > Download the Sigma_6_Poly_master source files from the repository here.
     > Create a project folder in your computer local drive named "Sigma_6_Poly_master".
     > Copy the downloaded source files into the project folder.
     > Double-click on the file "Sigma_6_Poly_master.ino" -- this should open Arduino IDE and load
