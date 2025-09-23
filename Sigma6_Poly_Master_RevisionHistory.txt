@@ -1,0 +1,102 @@
+
+                 'Sigma-6 Poly Master Controller' (SAMD21 MCU)
+
+                         Firmware Revision History
+
+================================================================================
+
+v0.5  25-08-2025  (WIP)
+```````````````````````
+Migrated code from ItsyBitsy M0 Synth.  Removed unwanted functionality.
+
+Adapted OLED display code to suit SSD1309 controller.
+
+Adapted EEPROM driver code to suit 24LC64 (8k x 8).
+
+Changed ADC input for Data Entry Pot: Use pin A11. (A12/AREF N/A in library.)
+
+
+v0.75  02-09-2025
+`````````````````
+Removed 'Voice Params' UI screen.  Added #define to set NUMBER_OF_VOICES.
+
+The number of Presets supported by the Master Controller is determined by the
+number of Preset names (strings) defined in the array *PresetName[], located
+in source file "poly_synth_panel.ino".
+
+Hence, if the number of Presets implemented in the voice modules is extended,
+then the names of the additional Presets should be added to the array.
+Otherwise, the additional Presets in the voice module will be inaccessible.
+
+Added "Display Brightness" UI screen to set OLED contrast (brightness).
+
+
+v0.80  18-09-2025 *
+`````````````````
+Added complete Preset/Patch table... copied from Poly-voice firmware.
+
+The number of Presets supported by the Master Controller is determined by the
+number of Presets defined in the array PresetPatch[] in flash memory.
+
+Added User Presets (8) saved in EEPROM via 'SET_USER_PRESET' screen.
+When Affirmed, active patch is saved as the currently selected Favorite.
+A User Preset is recalled by pressing one of the Favorite Preset buttons.
+
+Default Favorites are Voice Presets 1..8 (loaded from PresetPatch[] table).
+
+Added Command-Line User Interface (CLI) on USB-serial port.
+
+Commands implemented in this FW version:
+````````````````````````````````````````
+'patch' - prints the active patch param values in C source code format;
+'save'  - saves the active patch as a 'User Preset' in a Favorite (1..8),
+            and (optionally) assigns a name to the saved Preset;
+'help'  - prints a command usage summary.
+
+* NB: "Factory reset" will occur with this firmware version...
+  EEPROM data defaulted - Config param's and Fav. Presets.
+
+
+v0.85  19-09-2025 *
+`````````````````
+Fixed major defect:  v0.80 omitted function RecallUserPreset() which sends
+(potentially) modified patch parameters to the voice modules when a Favorite
+Preset is selected.
+
+When a User Preset (Favorite) is recalled, the master must send to the voices
+(via MIDI) any patch parameters which have been modified to create the User 
+Preset. In fact, the master sends all patch param's which can be modified via
+the UI (control panel), regardless of which param's differ from the Factory 
+Preset (base) values. 
+
+Added icon on HOME screen to indicate 'Patch Modified'.
+
+
+v0.86  21-09-2025
+`````````````````
+Fixed bug: 'Last selected Preset' was corrupted by recall of a Favorite.
+
+
+
+--------------------------------------------------------------------------------
+
+To Do:  
+```````
+
+> Support LED indicators on Favorite button/switches.
+
+> Support Osc Mix slider pots and add 'SHOW_MIXER_LEVELS' screen.
+
+> Support other controls: LFO Freq, Depth. (Adapt existing UI screens.)
+
+> Add LFO synchronization -- keep all voices LFOs in phase.
+
+> Add HOLD (sustain) function. (May need revision of voice firmware.)
+
+> Support passive keyboard interface (via SPI bus header).
+
+
+
+________________________________________________________________________________
+
+Sigma6_Poly_Master_RevisionHistory.txt                           www.mjbauer.biz  

@@ -1,0 +1,46 @@
+
+                 'Sigma-6 POLY Voice Module' (SAMD21 MCU)
+
+                         Firmware Revision History
+
+================================================================================
+
+v1.0  30-08-2025  (wip - not tested)
+````````````````
+Migrated code from ItsyBitsy M0 Synth.  Removed unwanted code.
+
+_/\/\/\_
+
+Fixed: MIDI CC73: Set ENV Attack Time -- data unit is 10ms (not 100ms).
+Fixed: MIDI CC74: Set ENV Peak-Hold Time -- data unit is 10ms (not 100ms).
+
+Added MIDI messages CC100 and CC38 to set pitch bend range and fine tuning.
+
+Added MIDI message type (CC80) to set Osc. Mixer levels.
+Data byte MSD = Osc number (0..5), LSD = Step value (0..15).
+
+Added MIDI message type (CC112) to reset LFO phase angle.
+
+Added LED drive on pin D5 = active (high) when note playing (gated).
+
+
+v1.2  01-09-2025  (sent to JPM for testing!)
+````````````````
+Revised all code files to use Arduino data types (uint8_t, int16_t, etc).
+
+Fixed a bug. Forgot to initialize synth engine... Must call PresetSelect()
+
+
+
+--------------------------------------------------------------------------------
+
+To Do:  
+```````
+> Refine preset 31 "Deep Sax" - make similar to Bass Overdrive, add osc AM.
+
+> 
+
+
+________________________________________________________________________________
+
+Sigma6_Poly_Voice_RevisionHistory.txt                            www.mjbauer.biz  
