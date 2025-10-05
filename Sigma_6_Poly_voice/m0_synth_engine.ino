@@ -344,11 +344,19 @@ fixed_t  GetPitchBendFactor()
  * Output:       m_ModulationLevel, normalized fixed-pt number in the range 0..+1.0.
  *
  */
-void   SynthModulation(unsigned data14)
+void  SynthModulation(unsigned data14)
 {
   if (data14 < (16 * 1024))
     m_ModulationLevel = (fixed_t) ((uint32_t) data14 << 6);
   else  m_ModulationLevel = FIXED_MAX_LEVEL;
+}
+
+
+// Set the local variable m_RvbMix - unit = percent (%)
+//
+void  SynthSetReverbMix(uint8_t rvbmix_pc)
+{
+  if (rvbmix_pc <= 100) m_RvbMix = rvbmix_pc;
 }
 
 
@@ -717,8 +725,8 @@ void   AudioLevelController()
  * Function:     Synth LFO implementation.
  *
  * Called by SynthProcess() at 1ms intervals, this function generates a sinusoidal
- * waveform in real time.  LFO frequency is a patch parameter, g_Patch.LFO_Freq_x10,
- * an unsigned 8-bit value = LFO freq * 10 Hz, range 1..250 => 0.1 to 25 Hz.
+ * waveform in real time.  LFO frequency is a patch parameter, unsigned 8-bit value
+ * LFO freq x10, range 1..250 => 0.1 to 25 Hz.
  *
  * See also OscFreqModulation() function which updates the input variable m_LFO_Step.
  * Effective sample rate (Fs) is 1000 Hz.
@@ -842,7 +850,7 @@ void   OscFreqModulation()
   fixed_t freqDevn;        // deviation from median freq. (x0.5 .. x2.0)
   long   oscStep;         // temporary for calc'n (16:16 bit fix-pt)
   long   oscFreqLFO;      // 24:8 bit fixed-point format (8-bit fraction)
-  short   osc, cents;
+  short  osc, cents;
 
   oscFreqLFO = (((int) g_Patch.LFO_Freq_x10) << 8) / 10;  // 24:8 bit fixed-pt
   m_LFO_Step = (oscFreqLFO * WAVE_TABLE_SIZE) / 1000;  // LFO Fs = 1000Hz

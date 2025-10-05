@@ -21,7 +21,7 @@
 #define BUILD_FOR_POLY_VOICE       TRUE   // TRUE => Build for Sigma-6 Poly voice
 
 // Firmware build options...........................
-#define EEPROM_IS_INSTALLED        FALSE  // FALSE => EEPROM not installed!
+#define EEPROM_IS_INSTALLED        FALSE  // FALSE => EEPROM not installed
 #define APPLY_VELOCITY_EXPL_CURVE  FALSE  // TRUE => Apply "exponential" ampld curve
 #define APPLY_EXPRESSN_EXPL_CURVE  FALSE  // TRUE => Apply "exponential" ampld curve
 #define LEGATO_ENABLED_ALWAYS      TRUE   // TRUE => Legato Mode always enabled
@@ -257,6 +257,7 @@ void   SynthExpression(unsigned data14);
 void   SynthModulation(unsigned data14);
 void   SynthProcess();
 void   SynthSetOscFrequency(float freq_Hz);
+void   SynthSetReverbMix(uint8_t rvbmix_pc);
 void   SynthTriggerAttack();
 void   SynthTriggerRelease();
 void   SynthLFO_PhaseSync();

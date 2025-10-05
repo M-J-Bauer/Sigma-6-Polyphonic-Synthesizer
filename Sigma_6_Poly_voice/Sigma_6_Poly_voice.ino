@@ -9,13 +9,17 @@
  *
  * Licence:    Open Source (Unlicensed) -- free to copy, distribute, modify
  *
- * Version:    1.2  01-SEP-2025  (See Revision History file)
+ * Version:    1.4  02-OCT-2025  (See Revision History file)
  */
 #include <fast_samd21_tc3.h>
 #include <Wire.h>
 #include "m0_synth_def.h"
 
-#define TESTPOINT3    7        // pin D7 is N/C on Poly-voice circuit
+#define GPIOA_PIN_MODE_OUT(bitnum)  (PORT_IOBUS->Group[0].DIRSET.reg = (1 << bitnum))
+#define GPIOA_PIN_SET_HIGH(bitnum)  (PORT_IOBUS->Group[0].OUTSET.reg = (1 << bitnum))
+#define GPIOA_PIN_SET_LOW(bitnum)   (PORT_IOBUS->Group[0].OUTCLR.reg = (1 << bitnum))
+
+#define TX_LED  27  // PORT_A bit 27
 
 void  TC3_Handler(void);       // Audio ISR - defined in "m0_synth_engine"
 
@@ -34,10 +38,10 @@ void  setup()
   pinMode(CHAN_SWITCH_S2, INPUT_PULLUP);
   pinMode(CHAN_SWITCH_S3, INPUT_PULLUP);
   pinMode(CHAN_SWITCH_S4, INPUT_PULLUP);
-
+  GPIOA_PIN_SET_HIGH(TX_LED);  // TX LED off
+  GPIOA_PIN_MODE_OUT(TX_LED);
   pinMode(TESTPOINT1, OUTPUT);  // scope test-point TP1 (ISR)
   pinMode(TESTPOINT2, OUTPUT);  // scope test-point TP2 (GATE)
-  pinMode(TESTPOINT3, OUTPUT);  // scope test-point TP3 (DEBUG)
   pinMode(SPI_DAC_CS, OUTPUT);
   if (!USE_SPI_DAC_FOR_AUDIO) pinMode(A0, OUTPUT);  // Use MCU on-chip DAC for audio
   digitalWrite(SPI_DAC_CS, HIGH);  // Set DAC CS High (idle)
@@ -175,7 +179,7 @@ void  MidiInputService()
       ||  g_MidiMode == OMNI_ON_MONO  || msgStatus == SYS_EXCLUSIVE_MSG)
       {
         ProcessMidiMessage(midiMessage, msgByteCount);
-//      g_MidiRxSignal = TRUE;  // signal to UI (not used in Poly voiuce)
+//      g_MidiRxSignal = TRUE;  // signal to UI (not used in Poly voice)
         msgBytesExpected = 0;
         msgByteCount = 0;
         msgIndex = 0;
@@ -203,7 +207,8 @@ void  ProcessMidiMessage(uint8_t *midiMessage, short msgLength)
     case NOTE_OFF_CMD:
     {
       SynthNoteOff(noteNumber);
-      digitalWrite(TESTPOINT2, LOW);  // "Gate" LED off
+      digitalWrite(TESTPOINT2, LOW);
+      GPIOA_PIN_SET_HIGH(TX_LED);  // "Gate" LED off
       break;
     }
     case NOTE_ON_CMD:
@@ -211,12 +216,14 @@ void  ProcessMidiMessage(uint8_t *midiMessage, short msgLength)
       if (velocity == 0) 
       {
         SynthNoteOff(noteNumber);
-        digitalWrite(TESTPOINT2, LOW);  // "Gate" LED off
+        digitalWrite(TESTPOINT2, LOW);
+        GPIOA_PIN_SET_HIGH(TX_LED);  // "Gate" LED off
       }
       else  
       {
         SynthNoteOn(noteNumber, velocity);
-        digitalWrite(TESTPOINT2, HIGH);  // "Gate" LED on
+        digitalWrite(TESTPOINT2, HIGH);
+        GPIOA_PIN_SET_LOW(TX_LED);  // "Gate" LED on
       }
       break;
     }
@@ -302,7 +309,11 @@ void  ProcessControlChange(uint8_t *midiMessage)
   }
   else if (CCnumber == 89)  // Set reverb mix level
   {
-    if (dataByte <= 100)  g_Config.ReverbMix_pc = dataByte;
+    if (dataByte <= 100)
+    {
+      g_Config.ReverbMix_pc = dataByte;
+      SynthSetReverbMix(dataByte);  // effective immediately
+    }
   }
   // The following CC numbers are to set synth Patch parameters:
   // ```````````````````````````````````````````````````````````
@@ -337,7 +348,7 @@ void  ProcessControlChange(uint8_t *midiMessage)
   {
     if (dataByte <= 100)  g_Patch.EnvSustainLevel = (uint16_t) dataByte;
   }
-  else if (CCnumber == 77)  // Set LFO frequency (data = Hz, max 50)
+  else if (CCnumber == 77)  // Set LFO frequency (data unit = 1Hz, max 50)
   {
     if (dataByte != 0 && dataByte <= 50)  
       g_Patch.LFO_Freq_x10 = (uint16_t) dataByte * 10;
