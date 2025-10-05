@@ -26,11 +26,10 @@
 #define SLIDER_POT4     A3   // Osc. Mix Level slider-pot #4
 #define SLIDER_POT5     A4   // Osc. Mix Level slider-pot #5
 #define SLIDER_POT6     A5   // Osc. Mix Level slider-pot #6
-#define DATA_ENTRY_POT  A11  // Data Entry pot (A12 not supported!)
+#define DATA_ENTRY_POT  A11  // Data Entry pot
 #define LFO_FREQ_POT    A8   // LFO (vibrato) frequency pot
 #define LFO_DEPTH_POT   A9   // LFO (vibrato) depth pot
-#define REVERB_POT      A11  // Reverb. Level pot
-#define LED_REG_SS      2    // SPI slave-select: LED drive register
+#define LED_REG_SS      2    // SPI slave-select: LED register 'LE'
 
 extern ConfigParams_t  g_Config;  // structure holding config param's
 extern PatchParamTable_t  g_Patch;   // Active patch param's
@@ -602,7 +601,8 @@ void  UserState_HomeScreen()
     }
   }
   //
-  // todo:  Monitor Sliders and control knobs (LFO Freq, Depth) -- call function
+  // todo:  Monitor Sliders and control knobs (LFO Freq, Depth)
+  //        If pot moved, invoke respective UI screen
   //
   // Refresh Preset displayed if selection changed...
   if (lastPresetShown != g_Config.PresetLastSelected && !g_FavoriteSelected)
@@ -753,14 +753,14 @@ void  UserState_SetupMenu()
     DisplayButtonLegend(BUTT_POS_A, "Exit");
     DisplayButtonLegend(BUTT_POS_B, "Item>");
     DisplayButtonLegend(BUTT_POS_C, "Enter");
-    item = 0;  // always start with pitch bend - (todo: later - User patch setup)
+    item = 0;  // always start with User Patch screen
     doRefresh = TRUE;
   }
 
   if (ButtonHit('A')) GoToNextScreen(HOME_SCREEN);
   if (ButtonHit('B'))
   {
-    item = (item + 1) % 5;  // 0..4  todo: 0..5
+    item = (item + 1) % 6;  // 0..5
     doRefresh = TRUE;
   }
   if (ButtonHit('C'))  // Enter selected screen...
@@ -912,7 +912,6 @@ void  UserState_SetUserPreset()
   }
 }
 
-//=======================================================================================
 
 void  UserState_SetPitchBend()  // Set on/off or bend range
 {
@@ -951,6 +950,9 @@ void  UserState_SetPitchBend()  // Set on/off or bend range
     g_Config.PitchBendEnable ^= 1;  // toggle
     g_Config.PitchBendEnable &= 1;
     StoreConfigData();
+	  // If pitch bend enabled, send MIDI msg to disable vibrato, and vice-versa...
+    if (g_Config.PitchBendEnable) MIDI_SendControlChange(BROADCAST, 87, 0);   // Vibrato disabled
+    else  MIDI_SendControlChange(BROADCAST, 87, 3);   // Vibrato auto-ramp
     doRefresh = TRUE;
   }
   if (ButtonHit('C'))  // Affirm
@@ -989,7 +991,7 @@ void  UserState_SetReverbLevel()
     Disp_PosXY(116, 1);
     Disp_PutImage(config_icon_9x9, 9, 9);  // Config icon
     DisplayButtonLegend(BUTT_POS_A, "Exit");
-    DisplayButtonLegend(BUTT_POS_B, "-");
+    DisplayButtonLegend(BUTT_POS_B, "Home");
     DisplayButtonLegend(BUTT_POS_C, "Affirm");
     setting = g_Config.ReverbMix_pc;
     doRefresh = TRUE;
@@ -1036,7 +1038,7 @@ void  UserState_SetMidiChannel()
     Disp_PosXY(116, 1);
     Disp_PutImage(config_icon_9x9, 9, 9);  // Config icon
     DisplayButtonLegend(BUTT_POS_A, "Exit");
-    DisplayButtonLegend(BUTT_POS_B, "-");
+    DisplayButtonLegend(BUTT_POS_B, "Home");
     DisplayButtonLegend(BUTT_POS_C, "Set");
     setting = g_Config.MidiChannel;
     doRefresh = TRUE;
@@ -1048,8 +1050,8 @@ void  UserState_SetMidiChannel()
     doRefresh = TRUE;
   }
 
-  if (ButtonHit('A'))  GoToNextScreen(SETUP_MENU);
-  if (ButtonHit('B')) ;  // do nothing
+  if (ButtonHit('A'))  GoToNextScreen(SETUP_MENU);  // exit
+  if (ButtonHit('B'))  GoToNextScreen(HOME_SCREEN);
   if (ButtonHit('C'))
   {
     g_Config.MidiChannel = setting;
@@ -1109,6 +1111,7 @@ void  UserState_SetDisplayBright()
   {
     g_Config.DisplayBrightness = setting;  // range 0..95
     StoreConfigData();  // commit
+	GoToNextScreen(HOME_SCREEN);
   }
   if (ButtonHit('C'))  GoToNextScreen(SETUP_MENU);
 
@@ -1217,6 +1220,8 @@ void  UserState_SetVoiceTuning()
 
 void  UserState_Set_LFO_Depth()
 {
+  static uint32_t timeSinceLastUpdate_ms;  // unit = ms
+  static bool settingChanged;
   static uint16_t  setting;
   bool doRefresh = FALSE;
 
@@ -1226,9 +1231,9 @@ void  UserState_Set_LFO_Depth()
     Disp_Mode(SET_PIXELS);
     Disp_PosXY(116, 1);
     Disp_PutImage(patch_icon_9x9, 9, 9);  // Patch icon
-    DisplayButtonLegend(BUTT_POS_A, "Exit");
+    DisplayButtonLegend(BUTT_POS_A, "Home");
     DisplayButtonLegend(BUTT_POS_B, "Next");
-    DisplayButtonLegend(BUTT_POS_C, "Affirm");
+    DisplayButtonLegend(BUTT_POS_C, "Done");
     setting = g_Patch.LFO_FM_Depth;
     doRefresh = TRUE;
   }
@@ -1238,18 +1243,15 @@ void  UserState_Set_LFO_Depth()
     setting = ((int)DataPotPosition() * 205) / 255;  // 0..200
     setting = (setting / 5) * 5;  // cents quantized, step size = 5
     if (setting > 200) setting = 200;  // max. 200 cents
+    settingChanged = TRUE;
+    g_PatchModified = TRUE;
     doRefresh = TRUE;
   }
 
-  if (ButtonHit('A'))  GoToNextScreen(PATCH_MENU);
+  if (ButtonHit('A'))  GoToNextScreen(HOME_SCREEN);
   if (ButtonHit('B'))  GoToNextScreen(SET_LFO_FREQ);
-  if (ButtonHit('C'))  // Affirm:  Send to voice modules
-  {
-    g_Patch.LFO_FM_Depth = setting;  // unit = cents (1/100 semitone)
-    MIDI_SendControlChange(BROADCAST, 79, (setting / 5));  // unit = 5 cents
-    g_PatchModified = TRUE;
-  }
-
+  if (ButtonHit('C'))  GoToNextScreen(PATCH_MENU);
+  
   if (doRefresh)
   {
     Disp_SetFont(MONO_16_NORM);
@@ -1260,11 +1262,22 @@ void  UserState_Set_LFO_Depth()
     Disp_PosXY(Disp_GetX(), 30);
     Disp_PutText(" cents");
   }
+
+  if (settingChanged && timeSinceLastUpdate_ms >= 200)
+  {
+    g_Patch.LFO_FM_Depth = setting;  // unit = cents (1/100 semitone)
+    MIDI_SendControlChange(BROADCAST, 79, (setting / 5));  // unit = 5 cents
+    settingChanged = FALSE;  // prevent repeat update
+    timeSinceLastUpdate_ms = 0;
+  }
+  timeSinceLastUpdate_ms += 50;  // Call period is 50ms
 }
 
 
 void  UserState_Set_LFO_Freq()
 {
+  static uint32_t timeSinceLastUpdate_ms;  // unit = ms
+  static bool settingChanged;
   static uint16_t  setting;
   bool doRefresh = FALSE;
 
@@ -1274,9 +1287,9 @@ void  UserState_Set_LFO_Freq()
     Disp_Mode(SET_PIXELS);
     Disp_PosXY(116, 1);
     Disp_PutImage(patch_icon_9x9, 9, 9);  // Patch icon
-    DisplayButtonLegend(BUTT_POS_A, "Exit");
+    DisplayButtonLegend(BUTT_POS_A, "Home");
     DisplayButtonLegend(BUTT_POS_B, "Next");
-    DisplayButtonLegend(BUTT_POS_C, "Affirm");
+    DisplayButtonLegend(BUTT_POS_C, "Done");
     setting = g_Patch.LFO_Freq_x10 / 10;
     if (setting == 0) setting = 1;  // min. 1Hz
     doRefresh = TRUE;
@@ -1286,17 +1299,14 @@ void  UserState_Set_LFO_Freq()
   {
     setting = DataPotPosition() / 16;  // 0..15
     if (setting == 0) setting = 1;  // min. 1Hz
+    settingChanged = TRUE;
+    g_PatchModified = TRUE;
     doRefresh = TRUE;
   }
 
-  if (ButtonHit('A'))  GoToNextScreen(PATCH_MENU);
+  if (ButtonHit('A'))  GoToNextScreen(HOME_SCREEN);
   if (ButtonHit('B'))  GoToNextScreen(SET_LFO_RAMP);
-  if (ButtonHit('C'))  // Affirm:  Send to voice modules
-  {
-    g_Patch.LFO_Freq_x10 = setting * 10;
-    MIDI_SendControlChange(BROADCAST, 77, setting);  // 1..15 Hz
-    g_PatchModified = TRUE;
-  }
+  if (ButtonHit('C'))  GoToNextScreen(PATCH_MENU);
 
   if (doRefresh)
   {
@@ -1308,6 +1318,15 @@ void  UserState_Set_LFO_Freq()
     Disp_PosXY(Disp_GetX(), 28);
     Disp_PutText(" Hz");
   }
+
+  if (settingChanged && timeSinceLastUpdate_ms >= 200)
+  {
+    g_Patch.LFO_Freq_x10 = setting * 10;
+    MIDI_SendControlChange(BROADCAST, 77, setting);  // 1..15 Hz
+    settingChanged = FALSE;  // prevent repeat update
+    timeSinceLastUpdate_ms = 0;
+  }
+  timeSinceLastUpdate_ms += 50;  // Call period is 50ms
 }
 
 

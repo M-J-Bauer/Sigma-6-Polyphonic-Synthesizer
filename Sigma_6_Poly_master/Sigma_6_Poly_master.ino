@@ -20,7 +20,7 @@
  */
 #include <Wire.h>
 
-#define FIRMWARE_VERSION  "0.86"
+#define FIRMWARE_VERSION  "0.88"
 
 #define NUMBER_OF_VOICES   6  // Set according to hardware configuration
 
@@ -64,7 +64,7 @@ typedef struct table_of_configuration_params
   uint8_t  PresetLastSelected;      // Preset last selected (0..127)
   uint8_t  MasterTuneOffset;        // Master tuning (cents + 64)
   uint8_t  DisplayBrightness;       // OLED contrast setting (5..100 %)
-  uint8_t  VoiceTuning[16];         // Voice fine tuning (cents +64)
+  uint8_t  VoiceTuning[16];         // Voice fine tuning (cents + 64)
   uint8_t  UserPresetBase[8];       // Base Presets of the 8 Favorites
   //
   uint32_t EEpromCheckWord;         // Data integrity check...
@@ -165,11 +165,14 @@ void  setup()
   else  g_MidiMode = OMNI_OFF;
 
   // Initialize the voice channels............
-  MIDI_SendProgramChange(BROADCAST, g_Config.PresetLastSelected);
-  MIDI_SendControlChange(BROADCAST, 68, 0);   // Legato Mode: Disabled
-  MIDI_SendControlChange(BROADCAST, 86, 2);   // Ampld Control: ENV1*VELO
-  MIDI_SendControlChange(BROADCAST, 87, 3);   // Vibrato Control: Auto (ramp)
-  MIDI_SendControlChange(BROADCAST, 88, 1);   // Pitch-Bend Enable (0/1)
+  MIDI_SendProgramChange(BROADCAST, g_Config.PresetLastSelected);  // Recall last preset
+  MIDI_SendControlChange(BROADCAST, 68, 0);   // Legato Mode: always Disabled
+  MIDI_SendControlChange(BROADCAST, 86, 2);   // Ampld Control: always ENV1*VELO
+  MIDI_SendControlChange(BROADCAST, 89, g_Config.ReverbMix_pc);
+  MIDI_SendControlChange(BROADCAST, 88, g_Config.PitchBendEnable);
+  // If pitch bend enabled, send MIDI msg to disable vibrato, and vice-versa...
+  if (g_Config.PitchBendEnable) MIDI_SendControlChange(BROADCAST, 87, 0);   // Vibrato disabled
+  else  MIDI_SendControlChange(BROADCAST, 87, 3);   // Vibrato auto-ramp
   // The following 2 messages must be sent in sequence...
   MIDI_SendControlChange(BROADCAST, 100, 0);  // Reg. Param 0 = Pitch-Bend range
   MIDI_SendControlChange(BROADCAST, 38, g_Config.PitchBendRange);  // Data Entry
@@ -275,6 +278,7 @@ void  RecallUserPreset(uint8_t favNum)  // favNum = 0..7
   MIDI_SendControlChange(BROADCAST, 72, g_Patch.EnvReleaseTime / 100);
   MIDI_SendControlChange(BROADCAST, 70, g_Patch.MixerOutGain_x10);
   MIDI_SendControlChange(BROADCAST, 71, g_Patch.LimiterLevelPc);
+  
   for (oscNum = 0;  oscNum < 6;  oscNum++)
   {
     dataValue = (oscNum << 4) + ((uint8_t)g_Patch.MixerInputStep[oscNum] & 0x0F);
@@ -715,7 +719,7 @@ int  EEpromWriteData(uint8_t *pData, uint16_t begAddr, uint8_t nbytes)
     while (npolls--)  // ACK polling -- exit when ACK rec'd
       { if (EEpromACKresponse()) break; }
     if (npolls == 0)  errcode = 0xBE;
-    else  EEpromACKresponse();  // Send "dummy" command (redundant ???) - todo: test without
+    else  EEpromACKresponse();  // (redundant ???)
   }
 
   EEPROM_WRITE_INHIBIT();  // Set WP High (or float)
