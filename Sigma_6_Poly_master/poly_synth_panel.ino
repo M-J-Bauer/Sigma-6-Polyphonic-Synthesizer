@@ -20,16 +20,9 @@
 #define SW_SENSE_ROW0   5    // Button/switch matrix sense line 0
 #define SW_SENSE_ROW1   6    // Button/switch matrix sense line 1
 #define SW_SENSE_ROW2   7    // Button/switch matrix sense line 2
-#define SLIDER_POT1     A0   // Osc. Mix Level slider-pot #1
-#define SLIDER_POT2     A1   // Osc. Mix Level slider-pot #2
-#define SLIDER_POT3     A2   // Osc. Mix Level slider-pot #3
-#define SLIDER_POT4     A3   // Osc. Mix Level slider-pot #4
-#define SLIDER_POT5     A4   // Osc. Mix Level slider-pot #5
-#define SLIDER_POT6     A5   // Osc. Mix Level slider-pot #6
-#define DATA_ENTRY_POT  A11  // Data Entry pot
 #define LFO_FREQ_POT    A8   // LFO (vibrato) frequency pot
 #define LFO_DEPTH_POT   A9   // LFO (vibrato) depth pot
-#define LED_REG_SS      2    // SPI slave-select: LED register 'LE'
+#define LED_REG_LE      2    // SPI slave-select: LED register 'LE'
 
 extern ConfigParams_t  g_Config;  // structure holding config param's
 extern PatchParamTable_t  g_Patch;   // Active patch param's
@@ -50,6 +43,7 @@ enum User_Interface_States  // aka 'Screen identifiers'
   SET_DISP_BRIGHT,
   SET_VOICE_TUNING,
   // patch ...
+  SET_MIXER_LEVELS,
   SET_LFO_DEPTH,
   SET_LFO_FREQ,
   SET_LFO_RAMP,
@@ -59,39 +53,8 @@ enum User_Interface_States  // aka 'Screen identifiers'
   SET_ENV_SUSTAIN,
   SET_ENV_RELEASE,
   SET_MIXER_GAIN,
-  SET_LIMITER_LVL,
-  // controls ...
-  SHOW_MIXER_LEVELS
+  SET_LIMITER_LVL
 };
-
-// ------------  Function prototype definitions  ----------------------------------------
-//
-void  UserState_StartupScreen();
-void  UserState_ConfirmDefault();
-void  UserState_HomeScreen();
-void  UserState_PresetSelect();
-void  UserState_SetupMenu();
-void  UserState_PatchMenu();
-//
-void  UserState_SetUserPreset();
-void  UserState_SetPitchBend();
-void  UserState_SetReverbLevel();
-void  UserState_SetMidiChannel();
-void  UserState_SetDisplayBright();
-void  UserState_SetVoiceTuning();
-//
-void  UserState_Set_LFO_Depth();
-void  UserState_Set_LFO_Freq();
-void  UserState_Set_LFO_RampTime();
-void  UserState_Set_ENV_Attack();
-void  UserState_Set_ENV_Hold();
-void  UserState_Set_ENV_Decay();
-void  UserState_Set_ENV_Sustain();
-void  UserState_Set_ENV_Release();
-void  UserState_Set_MixerGain();
-void  UserState_Set_LimiterLevel();
-//
-void  UserState_ShowMixerLevels();  // *** todo ***
 
 /*
  * Bitmap image definition
@@ -157,14 +120,15 @@ bitmap_t RobotDyn_logo_11x11[] = {
   0x04, 0x40, 0x3F, 0x80, 0x4E, 0x00, 0x11, 0x00, 0x19, 0x80
 };
 
-char messageLine1[32], messageLine2[32];  // message to display
-
 const uint8_t  percentLogScale[] =       // 16 values, 3dB log scale (approx.)
         { 0, 1, 2, 3, 4, 5, 8, 10, 12, 16, 25, 35, 50, 70, 100, 100  };
 
-const uint16_t timeValueQuantized[] =     // 16 values, logarithmic scale
+const uint16_t  timeValueQuantized[] =     // 16 values, logarithmic scale
         { 0, 10, 20, 30, 50, 70, 100, 200, 300, 500, 700, 1000, 1500, 2000, 3000, 5000 };
-
+		
+const uint8_t  oscFreqMultConst[] =     // Dummy values at idx = 0, 2, 3 (non-integer)
+        { 0, 1, 0, 0, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0 };
+		
 
 //===================   P U S H - B U T T O N   F U N C T I O N S  ======================
 //
@@ -244,35 +208,90 @@ bool  ButtonHit(char buttonCode)
   return result;
 }
 
+/*
+ * Function:   Set favorite Button LED state (arg2 = ON or OFF)
+ * Arg1:  buttonID = 0..7  (0 => button #1 (LHS); 7 => button #8)
+ * Note:  All other button LEDs will be turned off.
+ *        Call with buttonID > 7 to set all LEDs to same state.
+ */
+void  ButtonLEDstate(char buttonID, bool state)
+{
+  static bool  PrepDone;
+  uint8_t  LED_states;  // 1 bit per LED, 1 = ON, 0 = OFF
+  uint8_t  bitMask = 1 << (7 - buttonID);
+
+  if (!PrepDone)  // One-time initialization at start-up
+  {
+    pinMode(LED_REG_LE, OUTPUT);
+    digitalWrite(LED_REG_LE, HIGH);
+    PrepDone = TRUE;
+  }
+
+  if (state == OFF)  LED_states = 0x00;  // Clear all bits
+  else  LED_states = bitMask;  // Set 1 bit
+  if (buttonID > 7)  LED_states = (state == OFF) ? 0x00 : 0xFF;  // All bits = state
+
+  SPI.beginTransaction(SPISettings(500000, LSBFIRST, SPI_MODE2));
+  digitalWrite(LED_REG_LE, LOW);
+  SPI.transfer(LED_states ^ 0xFF);  // Active LOW
+  digitalWrite(LED_REG_LE, HIGH);
+  SPI.endTransaction();
+}
+
 
 //=================  D A T A   E N T R Y   P O T   F U N C T I O N S  ===================
 //
-static long  potReadingAve;  // smoothed pot reading [24:8 fixed-pt]
+static long   potReadingAve;  //  Data Entry pot reading smoothed [24:8 fixed-pt]
+static short  sliderPotReading[6];  // Raw ADC readings (10 bits)
+static short  LFO_FreqPotReading, LFO_DepthPotReading;
 //
 /*
- * Overview:  Service Routine for front-panel data-entry pot.
+ * Overview:  Service Routine for front-panel data-entry pot and other control pots.
  *            Non-blocking "task" called at 5ms intervals from main loop.
  *
- * Detail:    The routine reads the pot input and keeps a rolling average of the ADC
- *            readings in fixed-point format (24:8 bits);  range 0.0 ~ 1023.99
+ * Detail:    The routine reads the Data Entry pot input and keeps a rolling average of 
+ *            the ADC readings in fixed-point format (24:8 bits);  range 0.0 ~ 1023.99.
  *            The current pot position can be read by a call to function DataPotPosition().
+ *            Slider pots and LFO control pot readings are not smoothed.
  */
 void  PotService()
 {
-  long potReading = analogRead(DATA_ENTRY_POT);  // 1st reading invalid
-  potReading = analogRead(DATA_ENTRY_POT);  // valid reading (10 bits)
+  static const uint32_t  pinid[] = { A0, A1, A2, A3, A4, A5 };
+  static uint8_t  call;  // call sequence = 0, 1, 2 ... 7, 0, 1, ...
+  short  dummyRead;
+  long   potReading;
 
+  dummyRead = analogRead(A11);  // 1st reading invalid
+  potReading = analogRead(A11);  // valid reading (10 bits)
   // Apply 1st-order IIR filter (K = 0.25)
   potReading = potReading << 8;  // convert to fixed-point (24:8 bits)
   potReadingAve -= (potReadingAve >> 2);
   potReadingAve += (potReading >> 2);
+
+  if (call < 6)  // on calls 0..5
+  {
+    dummyRead = analogRead(pinid[call]);  // 1st reading invalid
+    sliderPotReading[call] = analogRead(pinid[call]);
+  }
+  else if (call == 6)
+  {
+    dummyRead = analogRead(A8);  // 1st reading invalid
+    LFO_FreqPotReading = analogRead(A8);
+  }
+  else if (call == 7)
+  {
+    dummyRead = analogRead(A9);  // 1st reading invalid
+    LFO_DepthPotReading = analogRead(A9);
+  }
+  
+  if (++call >= 8)  call = 0;  // repeat ADC read sequence
 }
 
 /*
- * Overview:     Returns TRUE if the pot position has changed by more than 2% since a
- *               previous call to the function which also returned TRUE. (20/1024 -> 2%)
+ * Overview:  Returns TRUE if the pot position has changed by more than 2% since a
+ *            previous call to the function which also returned TRUE. (20/1024 -> 2%)
  *
- * Return val:   (bool) status flag, value = TRUE or FALSE
+ * Returns:   (bool) status flag, TRUE or FALSE
  */
 bool  DataPotMoved()
 {
@@ -300,6 +319,40 @@ uint8_t  DataPotPosition()
 {
   return (uint8_t)(potReadingAve >> 10);    // (Integer part) / 4
 }
+
+
+/*
+ * Overview:  Returns TRUE if the pot position has changed by more than 2% since a
+ *            previous call to the function which also returned TRUE. (20/1024 := 2%)
+ *
+ * Entry arg: potid = pot ID number, one of 6, range 0..5
+ * Returns:   (bool) status flag, TRUE or FALSE
+ */
+bool  SliderPotMoved(uint8_t potid)
+{
+  static short  lastReading[6];
+  bool result = FALSE;
+
+  if (abs(sliderPotReading[potid] - lastReading[potid]) > 20)  // approx. 2% change
+  {
+    result = TRUE;
+    lastReading[potid] = sliderPotReading[potid];
+  }
+  return result;
+}
+
+/*
+ * Overview:  Returns current position of a specified slider pot.
+ *
+ * Entry arg: potid = pot ID number, one of 6, range 0..5
+ * Returns:   (uint8_t) Slider pot position, range 0..255
+ */
+uint8_t  SliderPosition(uint8_t potid)
+{
+  return  (uint8_t)(sliderPotReading[potid] >> 2);  // 0..255
+}
+
+// ***** todo:  Add functions to support LFO control pots  *****
 
 
 //=============  S C R E E N   N A V I G A T I O N   F U N C T I O N S  =================
@@ -385,7 +438,7 @@ void  UserInterfaceTask(void)
     if (nextScreen != currentScreen)  Disp_ClearScreen();
     previousScreen = currentScreen;  // make the switch
     currentScreen = nextScreen;      // next screen becomes current
-    DataPotMoved();  // clear 'pot moved' flag
+    DataPotMoved();  // clear 'pot moved' flag...
   }
 
   switch (nextScreen)
@@ -404,6 +457,7 @@ void  UserInterfaceTask(void)
     case SET_DISP_BRIGHT:    UserState_SetDisplayBright();   break;
     case SET_VOICE_TUNING:   UserState_SetVoiceTuning();     break;
     // patch
+    case SET_MIXER_LEVELS:   UserState_SetMixerLevels();     break;
     case SET_LFO_DEPTH:      UserState_Set_LFO_Depth();      break;
     case SET_LFO_FREQ:       UserState_Set_LFO_Freq();       break;
     case SET_LFO_RAMP:       UserState_Set_LFO_RampTime();   break;
@@ -414,11 +468,9 @@ void  UserInterfaceTask(void)
     case SET_ENV_RELEASE:    UserState_Set_ENV_Release();    break;
     case SET_MIXER_GAIN:     UserState_Set_MixerGain();      break;
     case SET_LIMITER_LVL:    UserState_Set_LimiterLevel();   break;
-    // controls
-    case SHOW_MIXER_LEVELS:  UserState_ShowMixerLevels();    break;
   }
   
-  isNewScreen = FALSE;
+  isNewScreen = FALSE;  // New screen prep done
 }
 
 
@@ -428,10 +480,12 @@ void  UserState_StartupScreen()
 {
   static uint32_t  stateTimer;  // unit = 50ms
   static bool  doneEEpromCheck;
+  static uint8_t  led;
+  bool  exit = FALSE;
 
   if (isNewScreen)
   {
-    stateTimer = 0;
+    led = stateTimer = 0;
     if (g_EEpromFaulty && !doneEEpromCheck)  // EEPROM check... One time only
     {
       DisplayTitleBar("    EEPROM Fault");
@@ -476,9 +530,13 @@ void  UserState_StartupScreen()
     else  DisplayButtonLegend(BUTT_POS_C, "-");
   } // end if (isNewScreen)
 
-  if (ButtonHit('A'))  GoToNextScreen(HOME_SCREEN);
-  if (ButtonHit('B'))  GoToNextScreen(HOME_SCREEN);
-  if (ButtonHit('C') && !g_EEpromFaulty) GoToNextScreen(CONFIRM_DEFAULT);
+  if (ButtonHit('A'))  exit = TRUE;  // Home
+  if (ButtonHit('B'))  exit = TRUE;  // Home
+  if (ButtonHit('C') && !g_EEpromFaulty)  // goto 'Default Config' prompt screen...
+    { ButtonLEDstate(88, OFF);  GoToNextScreen(CONFIRM_DEFAULT); }
+
+  if (led >= 8)  led = 0;  // LED chaser...
+  if (stateTimer >= (3 * led))  ButtonLEDstate(led++, ON);
  
   if (g_EEpromFaulty && !doneEEpromCheck)
   {
@@ -489,7 +547,9 @@ void  UserState_StartupScreen()
       GoToNextScreen(STARTUP);  // Repeat startup without EEprom check
     }
   }
-  else if (++stateTimer > 100)  GoToNextScreen(HOME_SCREEN);  // 5 sec time-out
+  else if (++stateTimer > 100) exit = TRUE;  // 5 sec time-out
+
+  if (exit) { ButtonLEDstate(88, OFF);  GoToNextScreen(HOME_SCREEN); }
 }
 
 
@@ -548,7 +608,7 @@ void  UserState_HomeScreen()
   static short  midiNoActivityTimer;  // unit = 50ms
   static bool  midiIconVisible;
   static bool  patchIconVisible;
-  uint8_t  fav;
+  uint8_t  osc, fav;
 
   if (isNewScreen)
   {
@@ -577,6 +637,10 @@ void  UserState_HomeScreen()
     DisplayButtonLegend(BUTT_POS_A, "PRESET");
     DisplayButtonLegend(BUTT_POS_B, "SETUP");
     DisplayButtonLegend(BUTT_POS_C, "PATCH");
+
+    for (osc = 0;  osc < 6;  osc++)  
+      SliderPotMoved(osc);  // clear 'pot moved' flags
+    
     lastPresetShown = 255;  // force refresh
     lastFavShown = 255;
     midiIconVisible = FALSE;
@@ -593,17 +657,17 @@ void  UserState_HomeScreen()
     if (ButtonHit('1' + fav))
     {
       RecallUserPreset(fav);  // 0..7
-      //
-      // todo: turn on LED for fav preset selected
-      //
+      ButtonLEDstate(fav, ON);  // Turn on LED for fav preset
       lastFavShown = 255;  // force screen refresh
       break;
     }
   }
-  //
-  // todo:  Monitor Sliders and control knobs (LFO Freq, Depth)
-  //        If pot moved, invoke respective UI screen
-  //
+
+  for (osc = 0;  osc < 6;  osc++)  // Monitor Slider Pots
+    if (SliderPotMoved(osc))  GoToNextScreen(SET_MIXER_LEVELS);
+
+  // todo:  Monitor LFO control pots 
+
   // Refresh Preset displayed if selection changed...
   if (lastPresetShown != g_Config.PresetLastSelected && !g_FavoriteSelected)
   {
@@ -707,6 +771,7 @@ void  UserState_PresetSelect()
     PresetSelect(setting);
     g_FavoriteSelected = 0;  // redundant, for clarity only
     g_PatchModified = FALSE;
+    ButtonLEDstate(88, OFF);  // Turn off FAV Preset LED(s)
     GoToNextScreen(HOME_SCREEN);
   }
 
@@ -772,7 +837,7 @@ void  UserState_SetupMenu()
       case 2:  GoToNextScreen(SET_REVERB_LEVEL);  break;
       case 3:  GoToNextScreen(SET_MIDI_CHAN);     break;
       case 4:  GoToNextScreen(SET_DISP_BRIGHT);   break;
-      case 5:  GoToNextScreen(SET_VOICE_TUNING);  break;
+      case 5:  GoToNextScreen(SET_VOICE_TUNING);  break; 
     }
   }
 
@@ -789,7 +854,7 @@ void  UserState_SetupMenu()
 void  UserState_PatchMenu()
 {
   static const char *parameterName[] =
-    { "LFO Depth", "LFO Freq", "LFO Ramp", "ENV Attack", "ENV Hold",
+    { "Mixer Levels", "LFO Depth", "LFO Freq", "LFO Ramp", "ENV Attack", "ENV Hold",
       "ENV Decay", "ENV Sustain", "ENV Release", "Mixer Gain", "Limiter" };
   static uint8_t item;
   bool doRefresh = FALSE;
@@ -810,31 +875,31 @@ void  UserState_PatchMenu()
 
   if (DataPotMoved())
   {
-    item = DataPotPosition() / 25;  // 0..10
-    if (item > 9) item = 9;
+    item = DataPotPosition() / 24;  // 0..10
     doRefresh = TRUE;
   }
 
   if (ButtonHit('A')) GoToNextScreen(HOME_SCREEN);
   if (ButtonHit('B'))
   {
-    item = (item + 1) % 10;  // 0..9
+    item = (item + 1) % 11;  // 0..10
     doRefresh = TRUE;
   }
   if (ButtonHit('C'))  // Affirm selection...
   {
-    switch (item)  // 0..9
+    switch (item)  // 0..10
     {
-      case 0:  GoToNextScreen(SET_LFO_DEPTH);     break;
-      case 1:  GoToNextScreen(SET_LFO_FREQ);      break;
-      case 2:  GoToNextScreen(SET_LFO_RAMP);      break;
-      case 3:  GoToNextScreen(SET_ENV_ATTACK);    break;
-      case 4:  GoToNextScreen(SET_ENV_HOLD);      break;
-      case 5:  GoToNextScreen(SET_ENV_DECAY);     break;
-      case 6:  GoToNextScreen(SET_ENV_SUSTAIN);   break;
-      case 7:  GoToNextScreen(SET_ENV_RELEASE);   break;
-      case 8:  GoToNextScreen(SET_MIXER_GAIN);    break;
-      case 9:  GoToNextScreen(SET_LIMITER_LVL);   break;
+      case  0:  GoToNextScreen(SET_MIXER_LEVELS);  break;
+      case  1:  GoToNextScreen(SET_LFO_DEPTH);     break;
+      case  2:  GoToNextScreen(SET_LFO_FREQ);      break;
+      case  3:  GoToNextScreen(SET_LFO_RAMP);      break;
+      case  4:  GoToNextScreen(SET_ENV_ATTACK);    break;
+      case  5:  GoToNextScreen(SET_ENV_HOLD);      break;
+      case  6:  GoToNextScreen(SET_ENV_DECAY);     break;
+      case  7:  GoToNextScreen(SET_ENV_SUSTAIN);   break;
+      case  8:  GoToNextScreen(SET_ENV_RELEASE);   break;
+      case  9:  GoToNextScreen(SET_MIXER_GAIN);    break;
+      case 10:  GoToNextScreen(SET_LIMITER_LVL);   break;
     }
   }
 
@@ -886,9 +951,7 @@ void  UserState_SetUserPreset()
     StoreConfigData();
     g_FavoriteSelected = setting + 1;  // 1..8
     g_PatchModified = FALSE;
-    //
-    // todo: turn on LED for fav preset selected
-    //
+    ButtonLEDstate(setting, ON);  // Turn on LED for fav preset selected
     Disp_ClearScreen();
     Disp_SetFont(PROP_12_NORM);
     Disp_PosXY(32, 26);  // mid-screen
@@ -1220,7 +1283,7 @@ void  UserState_SetVoiceTuning()
 
 void  UserState_Set_LFO_Depth()
 {
-  static uint32_t timeSinceLastUpdate_ms;  // unit = ms
+  static uint32_t timeSinceLastChange_ms;  // unit = ms
   static bool settingChanged;
   static uint16_t  setting;
   bool doRefresh = FALSE;
@@ -1263,20 +1326,20 @@ void  UserState_Set_LFO_Depth()
     Disp_PutText(" cents");
   }
 
-  if (settingChanged && timeSinceLastUpdate_ms >= 200)
+  if (settingChanged && timeSinceLastChange_ms >= 200)
   {
     g_Patch.LFO_FM_Depth = setting;  // unit = cents (1/100 semitone)
     MIDI_SendControlChange(BROADCAST, 79, (setting / 5));  // unit = 5 cents
     settingChanged = FALSE;  // prevent repeat update
-    timeSinceLastUpdate_ms = 0;
+    timeSinceLastChange_ms = 0;
   }
-  timeSinceLastUpdate_ms += 50;  // Call period is 50ms
+  timeSinceLastChange_ms += 50;  // Call period is 50ms
 }
 
 
 void  UserState_Set_LFO_Freq()
 {
-  static uint32_t timeSinceLastUpdate_ms;  // unit = ms
+  static uint32_t timeSinceLastChange_ms;  // unit = ms
   static bool settingChanged;
   static uint16_t  setting;
   bool doRefresh = FALSE;
@@ -1319,14 +1382,14 @@ void  UserState_Set_LFO_Freq()
     Disp_PutText(" Hz");
   }
 
-  if (settingChanged && timeSinceLastUpdate_ms >= 200)
+  if (settingChanged && timeSinceLastChange_ms >= 200)
   {
     g_Patch.LFO_Freq_x10 = setting * 10;
     MIDI_SendControlChange(BROADCAST, 77, setting);  // 1..15 Hz
     settingChanged = FALSE;  // prevent repeat update
-    timeSinceLastUpdate_ms = 0;
+    timeSinceLastChange_ms = 0;
   }
-  timeSinceLastUpdate_ms += 50;  // Call period is 50ms
+  timeSinceLastChange_ms += 50;  // Call period is 50ms
 }
 
 
@@ -1736,9 +1799,154 @@ void  UserState_Set_LimiterLevel()
 }
 
 //=======================================================================================
-
-void  UserState_ShowMixerLevels()  // Slider pots  *** todo ***
+//
+// Function renders a dotted line horizontally at the current cursor position (x, y).
+// If length is not a multiple of 8 pix, the length will be truncated to nearest 8 pix.
+//
+void  DrawDottedLineHoriz(uint8_t length)  
 {
-  //
-  return;
+  static uint8_t  bar8pix = 0xAA;  // dotted bar, w=8, h=1 px
+  uint8_t  xpos = Disp_GetX();
+  uint8_t  ypos = Disp_GetY();
+  uint8_t  savePosX = xpos;
+
+  while (length >= 8)  
+  { 
+    Disp_PosXY(xpos, ypos);
+    Disp_PutImage((uint8_t *)&bar8pix, 8, 1);
+    xpos += 8;
+    length -= 8; 
+  }
+  Disp_PosXY(savePosX, ypos);  // restore caller's cursor position
+}
+
+
+void  UpdateBarGraphLevel(uint8_t osc, uint8_t level)
+{
+  static uint8_t  bar8pix = 0xFF;  // solid bar, w=8, h=1 px
+  uint8_t  xpos = 28 + osc * 16;
+  uint8_t  ypos = 22;  // height at level 15 (max.)
+  uint8_t  steps = 15;
+
+  while (steps--)  // erase existing bar (15 steps)
+  {
+    Disp_PosXY(xpos, ypos);
+    Disp_BlockClear(8, 1);  // erase 1 step
+    ypos += 2;  // go down 2 pixels
+  }
+  ypos = 52;  // height at level 0
+  while (level--)  // skip if level == 0
+  {
+    ypos -= 2;  // go up 2 pixels
+    Disp_PosXY(xpos, ypos);
+    Disp_PutImage((uint8_t *)&bar8pix, 8, 1);
+  }
+}
+
+
+void  UserState_SetMixerLevels()  // Oscillator Mixer Input Levels
+{
+  static uint32_t  timeSinceLastChange_ms;  // unit = ms
+  static uint8_t  setting[6];
+  static bool  settingChanged[6];
+  static bool  doRefresh[6];
+  uint8_t  idx, osc, level, xpos, ypos, dataValue;
+
+  if (isNewScreen)  // Render constant screen info
+  {
+    Disp_SetFont(PROP_8_NORM);
+    Disp_Mode(SET_PIXELS);
+    Disp_PosXY(3, 1);
+    Disp_PutText("OSC");
+    Disp_PosXY(0, 10);
+    Disp_PutText("Freq");
+    for (osc = 0;  osc < 6;  osc++)  
+    {
+      SliderPotMoved(osc);  // clear 'pot moved' flags
+      settingChanged[osc] = FALSE;
+      doRefresh[osc] = TRUE;
+      // Show Osc. numbers 1..6, hi-lighted, top of screen
+      xpos = 26 + osc * 16;
+      Disp_Mode(SET_PIXELS);
+      Disp_PosXY(xpos, 0);
+      Disp_DrawBar(12, 9);
+      Disp_Mode(CLEAR_PIXELS);  // invert pixels
+      Disp_SetFont(MONO_8_NORM);
+      Disp_PosXY(xpos + 4, 1);
+      Disp_PutDecimal(osc + 1, 1);  // 1..6
+      // Show Osc. Freq. Multiplier settings
+      xpos = 26 + osc * 16;
+      idx = g_Patch.OscFreqMult[osc];  // range 0..11 (1 of 12 options)
+      Disp_Mode(SET_PIXELS);
+      Disp_SetFont(PROP_8_NORM);
+      Disp_PosXY(xpos, 11);
+      if (idx == 0) Disp_PutText("1'2");  // 0.5 x fo
+      else if (idx == 2) Disp_PutText("4'3");  // 1.333 x fo
+      else if (idx == 3) Disp_PutText("3'2");  // 1.5 x fo
+      else  
+      {
+        Disp_SetFont(MONO_8_NORM);
+        Disp_PosXY(xpos + 4, 11);
+        Disp_PutDecimal(oscFreqMultConst[idx], 1);  // single digit (1..9)
+      }
+      UpdateBarGraphLevel(osc, g_Patch.MixerInputStep[osc]);  // Initialize bar graph
+    }
+    // Draw division lines and labels at levels: 0, 4, 8, 12 & 16
+    Disp_SetFont(PROP_8_NORM);
+    Disp_Mode(SET_PIXELS);
+    for (idx = 0;  idx < 5;  idx++)  
+    {
+      level = idx * 4;
+      ypos = 52 - idx * 8;  // 8 pix per division
+      Disp_PosXY(12, ypos - 1);
+      if (level < 10)  Disp_PosXY(16, ypos - 1);  // single digit
+      Disp_PutDecimal(level, 1);
+      Disp_PosXY(24, ypos);
+      if (idx == 0 || idx == 4) Disp_DrawBar(96, 1);  // Draw solid line
+      else  DrawDottedLineHoriz(96);  // Draw dotted line
+    }
+    timeSinceLastChange_ms = 0;
+  }
+
+  if (ButtonHit('A'))  GoToNextScreen(HOME_SCREEN);
+  if (ButtonHit('B'))  GoToNextScreen(HOME_SCREEN);
+  if (ButtonHit('C'))  GoToNextScreen(HOME_SCREEN);
+
+  for (osc = 0;  osc < 6;  osc++)
+  {
+    if (SliderPotMoved(osc))
+    {
+      setting[osc] = SliderPosition(osc) / 16;  // 0..15
+      settingChanged[osc] = TRUE;
+      doRefresh[osc] = TRUE;
+    }
+    if (settingChanged[osc] && timeSinceLastChange_ms >= 200)
+    {
+      // Update voices and patch parameter...
+      g_Patch.MixerInputStep[osc] = setting[osc];
+      g_PatchModified = TRUE;
+      dataValue = (osc << 4) + (setting[osc] & 0x0F);
+      MIDI_SendControlChange(BROADCAST, 80, dataValue);
+      settingChanged[osc] = FALSE;  // prevent repeat update
+      timeSinceLastChange_ms = 0;
+    }
+    if (doRefresh[osc])  // Show new Osc. Mixer Input Level
+    {
+      Disp_Mode(SET_PIXELS);
+      Disp_SetFont(MONO_8_NORM);
+      level = g_Patch.MixerInputStep[osc];
+      xpos = 26 + osc * 16;
+      Disp_PosXY(xpos, 56);  // erase existing value
+      Disp_BlockClear(16, 8);
+      if (level < 10)  xpos += 4;  // single digit
+      Disp_PosXY(xpos, 56);
+      Disp_PutDecimal(level, 1);  // 0..16
+      UpdateBarGraphLevel(osc, level);
+      doRefresh[osc] = FALSE;  // done
+    }
+  }
+
+  // If no change in last 10 seconds, return home...
+  if (timeSinceLastChange_ms >= 10000)  GoToNextScreen(HOME_SCREEN);
+  timeSinceLastChange_ms += 50;  // Call interval is 50ms
 }

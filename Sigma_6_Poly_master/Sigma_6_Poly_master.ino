@@ -19,14 +19,15 @@
  *             copy of the respective table defined in the Poly-voice firmware code.
  */
 #include <Wire.h>
+#include <SPI.h>
 
-#define FIRMWARE_VERSION  "0.88"
+#define FIRMWARE_VERSION  "0.90"
 
 #define NUMBER_OF_VOICES   6  // Set according to hardware configuration
 
 #define MIDI_MSG_MAX_LENGTH  32
 #define SYS_EXCLUSIVE_MSG  0xF0
-#define SYSTEM_MSG_EOX  0xF7
+#define SYSTEM_MSG_EOX     0xF7
 #define OMNI_ON     1       // MIDI IN mode: Omni-On Poly
 #define OMNI_OFF    3       // MIDI IN mode: Omni-Off Poly
 #define BROADCAST   16      // MIDI OUT channel for broadcast
@@ -43,9 +44,12 @@
 #define PITCH_BEND_CMD       0xE0    // 3-byte message
 
 // MCU I/O pin assignments.................
-#define KEYBOARD_SS     8    // SPI slave-select: Keyboard interface
-#define DEBUG_LED       8    // Temporary
-#define HEARTBEAT_LED   2    // Temporary
+#define EXTDIO_SS       8    // SPI slave-select: Ext. I/O port
+#define TX_LED          27   // PA27 = on-board TX_LED (for 'heartbeat')
+
+#define GPIOA_PIN_MODE_OUT(bit)  (PORT_IOBUS->Group[0].DIRSET.reg = (1 << bit))
+#define GPIOA_PIN_SET_HIGH(bit)  (PORT_IOBUS->Group[0].OUTSET.reg = (1 << bit))
+#define GPIOA_PIN_SET_LOW(bit)   (PORT_IOBUS->Group[0].OUTCLR.reg = (1 << bit))
 
 #define QUOTE  (char)34  // ASCII double-quote char
 #define OFF    0
@@ -130,21 +134,22 @@ void  setup()
   Serial1.begin(31250);        // initialize UART for MIDI IN/OUT
   Wire.begin();                // initialize IIC as master
   Wire.setClock(400*1000);     // set IIC clock to 400kHz
+  SPI.begin();                 // initialize SPI port
   analogReadResolution(10);    // set ADC resolution to 10 bits
-  pinMode(HEARTBEAT_LED, OUTPUT);  // Temp.  todo: remove
-  pinMode(DEBUG_LED, OUTPUT);      // Temp.  todo: remove
+  GPIOA_PIN_MODE_OUT(TX_LED);  // Heartbeat LED (PA27)
+  ButtonLEDstate(88, ON);      // Turn ON all FAV Preset LED indicators
   
   if (EEpromACKresponse() == FALSE)
     { g_EEpromFaulty = TRUE; }  // IIC bus error or EEprom not fitted
 
-  if (FetchConfigData() == 0 || g_Config.EEpromCheckWord != 0xABCDE085)  // Data corrupted
+  if (FetchConfigData() == 0 || g_Config.EEpromCheckWord != 0xABCDE090)  // Data corrupted
   {
     DefaultConfigData();  
     for (n = 0;  n < 8;  n++)  // Default the 8 Fav. Presets...
     {
       g_Config.UserPresetBase[n] = n + 1;  // 1..8
       memcpy(&g_Patch, &g_PresetPatch[n+1], sizeof(PatchParamTable_t));
-      strcpy(g_Patch.PresetName, "Unnamed_Fav_Preset");
+      strcpy(g_Patch.PresetName, "Favorite_Preset");
       StoreUserPreset(n);
     }
     StoreConfigData();
@@ -164,7 +169,7 @@ void  setup()
   if (g_Config.MidiChannel == 0)  g_MidiMode = OMNI_ON;
   else  g_MidiMode = OMNI_OFF;
 
-  // Initialize the voice channels............
+  // Initialize the voice modules ............
   MIDI_SendProgramChange(BROADCAST, g_Config.PresetLastSelected);  // Recall last preset
   MIDI_SendControlChange(BROADCAST, 68, 0);   // Legato Mode: always Disabled
   MIDI_SendControlChange(BROADCAST, 86, 2);   // Ampld Control: always ENV1*VELO
@@ -186,8 +191,7 @@ void  setup()
 
   g_NumberOfPresets = GetNumberOfPresets();
   PresetSelect(g_Config.PresetLastSelected);
-
-  // todo : turn off FAV Preset LED indicators
+  ButtonLEDstate(88, OFF);  // Turn off all FAV Preset LED indicators
 }
 
 
@@ -195,9 +199,7 @@ void  setup()
 //
 void  loop()
 {
-  static uint32_t startPeriod_5ms;
-  static uint32_t startPeriod_50ms;
-  static uint32_t startPeriod_500ms;
+  static uint32_t startPeriod_5ms, startPeriod_50ms, count_to_10;
 
   MidiInputService();
   ServicePortRoutine();
@@ -212,14 +214,11 @@ void  loop()
   {
     startPeriod_50ms = millis();
     ButtonScan();
-    //digitalWrite(HEARTBEAT_LED, OFF);  // Temp. - todo: remove
     if (g_DisplayEnabled) UserInterfaceTask();
-  }
-
-  if ((millis() - startPeriod_500ms) >= 500)  // 500ms period ended
-  {
-    startPeriod_500ms = millis();
-    //digitalWrite(HEARTBEAT_LED, ON);  // Temp. - todo: remove
+    ////
+    if (count_to_10 == 0)  GPIOA_PIN_SET_LOW(TX_LED);   // Heartbeat LED on
+    if (count_to_10 == 2)  GPIOA_PIN_SET_HIGH(TX_LED);  // Heartbeat LED off
+    if (++count_to_10 == 10) count_to_10 = 0;  // Reset heartbeat LED period
   }
 }
 
@@ -592,6 +591,9 @@ void  MIDI_SendProgramChange(uint8_t chan, uint8_t progNum)
 /*`````````````````````````````````````````````````````````````````````````````````````````````````
  *   Set "factory default" values for configuration param's.
  *   Some param's may be changed later by MIDI CC messages or the control panel.
+ *
+ *   To restore the User Presets to "factory" defaults, change the EEpromCheckWord value
+ *   here and in the EEPROM check code in the setup function, then do a firmware update.
  */
 void  DefaultConfigData(void)
 {
@@ -604,7 +606,7 @@ void  DefaultConfigData(void)
   g_Config.PresetLastSelected = 1;
   g_Config.MasterTuneOffset = 0;
   g_Config.DisplayBrightness = 30;   // %
-  g_Config.EEpromCheckWord = 0xABCDE085;
+  g_Config.EEpromCheckWord = 0xABCDE090;
 
   for (voice = 0; voice < 12; voice++)  // max. 12 voices
     { g_Config.VoiceTuning[voice] = 64; }  // Reset (64 = zero offset)
