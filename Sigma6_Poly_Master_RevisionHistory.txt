@@ -77,24 +77,62 @@ v0.86  21-09-2025
 Fixed bug: 'Last selected Preset' was corrupted by recall of a Favorite.
 
 
+v0.87  27-09-2025
+`````````````````
+Fixed bug: The SETUP menu item 'VOICE TUNING' was bypassed accidentally.
+
+
+v0.88  04-10-2025
+`````````````````
+Fixed bug:  
+  Reverb Mix (config param) was not transmitted to voice modules at start-up.
+
+Modified start-up function to amend voice modules initialization:
+  . Reverb Mix param is recalled from EEPROM and transmitted to voice modules;
+  . If pitch bend is enabled, vibrato is disabled, and vice-versa.
+
+Modified UI screen function for Pitch Bend setup:
+  . If pitch bend is enabled, vibrato is disabled, and vice-versa.
+
+Modified UI screen functions for LFO Freq and LFO Depth setting:
+  . If Data Entry pot moved, new setting is sent to voice modules immediately
+    and the active patch param is updated.
+  . Removed 'Affirm' button function (redundant). Replaced with 'Done'.
+
+
+v0.90  19-10-2025 *
+`````````````````
+> Added support for LED indicators on Favorite button/switches.
+
+> Added support for Osc Mix slider pots and add OSC MIXER LEVELS screen.
+
+> Added 'heartbeat' indicator = MCU on-board 'TX' LED (blue).
+
+* NB: "Factory reset" will occur with this firmware version...
+  EEPROM data defaulted - Config param's and Fav. Presets.
+  Voice 'Fine Tuning' parameters will need to be restored manually.
+
 
 --------------------------------------------------------------------------------
 
 To Do:  
 ```````
+> Support LFO control pots: LFO Freq, LFO Depth.
 
-> Support LED indicators on Favorite button/switches.
+> Add "N-key rollover"...  
+  If a Note-On message is received while all voice channels are busy,
+  the oldest note will be terminated and the new note will be initiated
+  after a 5ms delay.
 
-> Support Osc Mix slider pots and add 'SHOW_MIXER_LEVELS' screen.
+```
+> Add LFO synchronization option -- keep all voices LFOs in phase.
 
-> Support other controls: LFO Freq, Depth. (Adapt existing UI screens.)
+> Add HOLD (sustain) function... control by ext. switch/pedal or MIDI msg.
+  (Will need revision of voice firmware.)
 
-> Add LFO synchronization -- keep all voices LFOs in phase.
-
-> Add HOLD (sustain) function. (May need revision of voice firmware.)
-
-> Support passive keyboard interface (via SPI bus header).
-
+> Add "multi-timbral" mode -- for use with DAW/sequencer... 
+  Assign arbitrary MIDI IN (Master) channel to any Voice module(s);
+  Assign arbitrary Preset (factory-defined) to any Voice module(s).
 
 
 ________________________________________________________________________________
