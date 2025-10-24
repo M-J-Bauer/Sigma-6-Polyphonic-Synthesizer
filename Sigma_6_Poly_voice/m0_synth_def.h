@@ -1,9 +1,39 @@
 /**
  *   File:    m0_synth_def.h 
  *
- *   Data definitions & declarations for 'Sigma-6 M0' (SAMD21) sound synthesizers.
- *   This file is generalized to suit all SAMD21-based synth hardware variants, but
- *   must be customized to suit a particular synth hardware variant using #defines.
+ *   Data definitions & declarations for 'Sigma-6' (SAMD21) sound synthesizers.
+ *   This file must be customized to suit a particular synth variant as follows:
+ *   ``````````````````````````````````````````````````````````````````````````
+ *
+ *   Mono-synth/voice module using Adafruit M0 Express board:  
+ *           In Arduino IDE, select board: 'Adafruit ItsyBitsy M0 Express'
+ *           Set MCU_PINS_D2_D4_REVERSED to FALSE ^
+ *           Set BUILD_FOR_POLY_VOICE to FALSE
+ *           Set EEPROM_IS_INSTALLED to TRUE or FALSE as applicable
+ *
+ *   Mono-synth/voice module using RobotDyn M0 Mini board:  
+ *           In Arduino IDE, select board: 'Adafruit ItsyBitsy M0 Express'
+ *           Set MCU_PINS_D2_D4_REVERSED to TRUE ^
+ *           Set BUILD_FOR_POLY_VOICE to FALSE
+ *           Set EEPROM_IS_INSTALLED to TRUE or FALSE as applicable
+ *
+ *   Mono-synth/voice module using RobotDyn M0 Mini board (alt. option):  
+ *           In Arduino IDE, select board: 'Arduino Zero (Native USB)' #
+ *           Set MCU_PINS_D2_D4_REVERSED to FALSE ^
+ *           Set BUILD_FOR_POLY_VOICE to FALSE
+ *           Set EEPROM_IS_INSTALLED to TRUE or FALSE as applicable
+ *
+ *   POLY-synth/voice module using RobotDyn M0 Mini board:  
+ *           In Arduino IDE, select board: 'Arduino Zero (Native USB)' #
+ *           Set MCU_PINS_D2_D4_REVERSED to TRUE ^
+ *           Set BUILD_FOR_POLY_VOICE to TRUE
+ *           Set EEPROM_IS_INSTALLED to FALSE
+ *
+ *   # Build option uses the 32kHz crystal for the MCU system clock (preferred).
+ *
+ *   ^ Set MCU_PINS_D2_D4_REVERSED to TRUE if D2/D4 pin functions in the circuit 
+ *     do not match the board type selected in Arduino IDE.
+ *
  */
 #ifndef M0_SYNTH_DEF_H
 #define M0_SYNTH_DEF_H
@@ -14,24 +44,17 @@
 #include <ctype.h>
 #include <math.h>
 
-// Set TRUE for firmware to run on Sigma-6 Mono VM with Robotdyn M0-Mini MCU;
-// Set FALSE for all other boards, including Sigma-6 Poly Voice board...
-#define MCU_PINS_D2_D4_REVERSED    FALSE
-// Sigma-6 Poly voice has no display, no CV inputs, no EEPROM...
+// Firmware build options...............
+#define MCU_PINS_D2_D4_REVERSED    TRUE   // See note #
 #define BUILD_FOR_POLY_VOICE       TRUE   // TRUE => Build for Sigma-6 Poly voice
-
-// Firmware build options...........................
 #define EEPROM_IS_INSTALLED        FALSE  // FALSE => EEPROM not installed
+
 #define APPLY_VELOCITY_EXPL_CURVE  FALSE  // TRUE => Apply "exponential" ampld curve
 #define APPLY_EXPRESSN_EXPL_CURVE  FALSE  // TRUE => Apply "exponential" ampld curve
 #define LEGATO_ENABLED_ALWAYS      TRUE   // TRUE => Legato Mode always enabled
 #define USE_SPI_DAC_FOR_AUDIO      TRUE   // FALSE => Use MCU on-chip DAC (pin A0)
 
-#if (MCU_PINS_D2_D4_REVERSED)  // Sigma-6 mono VM using Robotdyn MCU board...
 #define HOME_SCREEN_SYNTH_DESCR  "Voice Module"  // 12 chars max.
-#else  // assume Adafruit ItsyBitsy M0 Express
-#define HOME_SCREEN_SYNTH_DESCR  "ItsyBitsy M0"  // 12 chars max. 
-#endif
 
 // Do not modify code below this line...
 //===========================================================================================
@@ -61,12 +84,12 @@ typedef unsigned char  BOOL;
 #define GATE_INPUT            19    // GATE input (digital, active High)
 #endif
 
-#if (MCU_PINS_D2_D4_REVERSED)  // Sigma-6 mono VM using Robotdyn MCU board...
-#define BUTTON_B_PIN           2    // RobotDyn pinout (uncorrected)
-#define SPI_DAC_CS             4
+#if (MCU_PINS_D2_D4_REVERSED)
+#define BUTTON_B_PIN           2
+#define SPI_DAC_CS             4    // using Robotdyn M0 Mini pinout
 #else
-#define BUTTON_B_PIN           4    // Adafruit pinout (& Arduino Zero)
-#define SPI_DAC_CS             2 
+#define BUTTON_B_PIN           4
+#define SPI_DAC_CS             2    // using Adafruit M0 pinout
 #endif
 
 #define WAVE_TABLE_SIZE          2048    // nunber of samples
