@@ -1,0 +1,97 @@
+
+             'Sigma-6 POLY Voice' (Robotdyn SAMD21 M0-mini MCU)
+
+                         Firmware Revision History
+
+================================================================================
+
+
+v1.0  30-08-2025  (wip - not tested)
+````````````````
+Migrated code from ItsyBitsy M0 Synth.  Removed unwanted code.
+
+_/\/\/\_
+
+Fixed: MIDI CC73: Set ENV Attack Time -- data unit is 10ms (not 100ms).
+Fixed: MIDI CC74: Set ENV Peak-Hold Time -- data unit is 10ms (not 100ms).
+
+Added MIDI messages CC100 and CC38 to set pitch bend range and fine tuning.
+
+Added MIDI message type (CC80) to set Osc. Mixer levels.
+Data byte MSD = Osc number (0..5), LSD = Step value (0..15).
+
+Added MIDI message type (CC112) to reset LFO phase angle.
+
+Added LED drive on pin D5 = active (high) when note playing (gated).
+
+
+v1.2  01-09-2025  (tested OK - Uploaded to GitHub)
+````````````````
+Revised all code files to use Arduino data types (uint8_t, int16_t, etc).
+
+Fixed a bug. Forgot to initialize synth engine... Must call PresetSelect()
+
+
+v1.3  30-09-2025  (sent to JPM for testing)
+````````````````
+Added feature:  TX LED indicates 'Note playing' (GATE ON).
+TX LED turns ON when MIDI Note-On msg rec'd;  LED turns OFF at Note-Off.
+
+
+v1.4  02-10-2025  (sent to JPM for testing)
+````````````````
+Fixed bug:  Reverb Mix/Level setting via MIDI message set did not change the 
+real-time variable m_RvbMix, requiring subsequent Preset selection for the 
+new setting to take effect.  Added function: SynthSetReverbMix(%).
+
+
+v1.5  25-10-2025
+````````````````
+Revised file: m0_synth_def.h -- Unified for all Sigma-6 SAMD21 variants.
+Modified conditional compile directives accordingly.
+
+Recommended to select board type "Arduino Zero (Native USB)" in Arduino IDE,
+because the core start-up code utilizes the 32.768kHz crystal for the MCU 
+system clock.  [See additional note at end of document.]
+
+
+
+
+--------------------------------------------------------------------------------
+
+To Do:  
+```````
+> Refine Preset 31 "Deep Sax" - make similar to Bass Overdrive (add expression).
+
+> Refine (or replace) "Bellbird" and other presets (see comments in code).
+
+
+________________________________________________________________________________
+
+Note on MCU clock source:
+`````````````````````````
+The Adafruit "ItsyBitsy M0 Express" MCU board does not have a crystal
+oscillator. It uses the MCU internal 8MHz RC oscillator for the system clock,
+which is not as precise and stable as a crystal oscillator. For musical pitch
+accuracy, it would be preferable to use a crystal. It might not be necessary
+then to fine tune the individual voices.
+
+The Robotdyn M0 Mini board copied the Arduino 'M0' design which has a 
+32.768kHz crystal fitted; it also copied the Arduino M0 I/O pin allocations.
+
+The Arduino M0 has I/O pins D2 & D4 reversed compared with the Arduino Zero.
+This was probably a mistake made by the design engineer of the Arduino M0,
+copied by Robotdyn. This can be corrected in software or hardware design.
+
+The Adafruit "ItsyBitsy M0 Express" SAMD21 board package (core software)
+initializes the MCU clock generator to use the internal 8MHz RC oscillator.
+
+The 'Arduino Zero' SAMD21 board package initializes the MCU clock generator
+to use the external 32.768kHz crystal oscillator (XOSC32K).  
+
+Hence, the 'Arduino Zero' board should be selected in the Arduino IDE.
+
+
+________________________________________________________________________________
+
+Sigma6_Poly_Voice_RevisionHistory.txt                            www.mjbauer.biz  
