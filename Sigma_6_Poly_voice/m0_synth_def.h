@@ -7,33 +7,23 @@
  *
  *   Mono-synth/voice module using Adafruit M0 Express board:  
  *           In Arduino IDE, select board: 'Adafruit ItsyBitsy M0 Express'
- *           Set MCU_PINS_D2_D4_REVERSED to FALSE ^
+ *           Set MCU_PINS_D2_D4_REVERSED to FALSE
  *           Set BUILD_FOR_POLY_VOICE to FALSE
  *           Set EEPROM_IS_INSTALLED to TRUE or FALSE as applicable
  *
- *   Mono-synth/voice module using RobotDyn M0 Mini board:  
- *           In Arduino IDE, select board: 'Adafruit ItsyBitsy M0 Express'
- *           Set MCU_PINS_D2_D4_REVERSED to TRUE ^
- *           Set BUILD_FOR_POLY_VOICE to FALSE
- *           Set EEPROM_IS_INSTALLED to TRUE or FALSE as applicable
- *
- *   Mono-synth/voice module using RobotDyn M0 Mini board (alt. option):  
- *           In Arduino IDE, select board: 'Arduino Zero (Native USB)' #
- *           Set MCU_PINS_D2_D4_REVERSED to FALSE ^
+ *   Mono-synth/voice module using RobotDyn M0 Mini board:
+ *           In Arduino IDE, select board: 'Arduino Zero (Native USB)'
+ *           Set MCU_PINS_D2_D4_REVERSED to TRUE
  *           Set BUILD_FOR_POLY_VOICE to FALSE
  *           Set EEPROM_IS_INSTALLED to TRUE or FALSE as applicable
  *
  *   POLY-synth/voice module using RobotDyn M0 Mini board:  
- *           In Arduino IDE, select board: 'Arduino Zero (Native USB)' #
- *           Set MCU_PINS_D2_D4_REVERSED to TRUE ^
+ *           In Arduino IDE, select board: 'Arduino Zero (Native USB)'
+ *           Set MCU_PINS_D2_D4_REVERSED to FALSE
  *           Set BUILD_FOR_POLY_VOICE to TRUE
  *           Set EEPROM_IS_INSTALLED to FALSE
- *
- *   # Build option uses the 32kHz crystal for the MCU system clock (preferred).
- *
- *   ^ Set MCU_PINS_D2_D4_REVERSED to TRUE if D2/D4 pin functions in the circuit 
- *     do not match the board type selected in Arduino IDE.
- *
+ *           Set LEGATO_ENABLED_ALWAYS to TRUE
+ *           Set USE_SPI_DAC_FOR_AUDIO to TRUE
  */
 #ifndef M0_SYNTH_DEF_H
 #define M0_SYNTH_DEF_H
@@ -45,13 +35,13 @@
 #include <math.h>
 
 // Firmware build options...............
-#define MCU_PINS_D2_D4_REVERSED    TRUE   // See note #
+#define MCU_PINS_D2_D4_REVERSED    FALSE  // See notes above
 #define BUILD_FOR_POLY_VOICE       TRUE   // TRUE => Build for Sigma-6 Poly voice
 #define EEPROM_IS_INSTALLED        FALSE  // FALSE => EEPROM not installed
 
 #define APPLY_VELOCITY_EXPL_CURVE  FALSE  // TRUE => Apply "exponential" ampld curve
 #define APPLY_EXPRESSN_EXPL_CURVE  FALSE  // TRUE => Apply "exponential" ampld curve
-#define LEGATO_ENABLED_ALWAYS      TRUE   // TRUE => Legato Mode always enabled
+#define LEGATO_ENABLED_ALWAYS      TRUE   // FALSE => Allow Multi-trigger mode
 #define USE_SPI_DAC_FOR_AUDIO      TRUE   // FALSE => Use MCU on-chip DAC (pin A0)
 
 #define HOME_SCREEN_SYNTH_DESCR  "Voice Module"  // 12 chars max.
