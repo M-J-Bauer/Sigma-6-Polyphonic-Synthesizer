@@ -21,10 +21,6 @@ Select board type 'Arduino Zero (Native USB)' for the Sigma-6 Poly __VOICE__ mod
 to the Adafruit M0 board package because the Arduino Zero startup code enables the 32.768kHz crystal oscillator for
 the MCU system clock. (The Adafruit ItsyBitsy M0 board uses the MCU internal 8MHz RC oscillator which is not as precise or stable.)
 
-The Robotdyn SAMD21 M0-Mini board is mostly compatible with the (obsolete) Arduino M0 board, but the Robotdyn MCU bootloader
-is a copy of the Arduino Zero bootloader which is incompatible! Hence it is impossible to upload the firmware code with the 
-Arduino M0 board package selected in the IDE.
-
 To build the __Sigma-6 Poly VOICE module__ firmware, you also need to install a "fast timer" library in the Arduino IDE.
 Open the Arduino Library Manager. From the 'Type' drop-down list, choose 'All'. In the 'Filter' box, write "fast_samd21_tc"
 and click 'INSTALL'. Then choose Type = "Installed". The library should then appear in your Arduino IDE as in this screen-shot:
