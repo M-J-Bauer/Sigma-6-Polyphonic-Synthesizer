@@ -118,21 +118,46 @@ v0.91  23-10-2025  (not released)
 Fixed bug in SPI usage:  LED register requires clock mode 3.
 
 
+v0.95  17-11-2025  (sent to JPM for testing)
+``````````````````
+Fixed bug:  Voice module initialization - Did not allow enough time after 
+power-on/reset to begin sending param's.  Voice module initialization now
+occurs after the Start-up screen wait time has elapsed (5 sec).
+
+Added "N-key rollover" to Note-On algorithm:  
+If a Note-On message is received while all voice channels are busy, the oldest
+note will be terminated and the new note will be initiated after a 5ms delay.
+
+Added LFO control pots: LFO Freq, LFO Depth... real-time control.
+
+Improved response time and noise immunity of sliders & LFO control pots...
+  . Reduced pot service interval to 1ms;  read 1 pot per call for 9ms cycle.
+  . Applied IIR filter with K = 1/2 for settling time = 9ms x 5 = 45ms (approx).
+
+
+v0.97  19-11-2025
+`````````````````
+Cosmetic improvements to 'Osc Mixer levels' screen. (Whole dotted lines.)
+
+Control pots 'LFO Freq' and 'LFO Depth' do not affect active Patch param's.
+Use 'Data Entry Pot' to adjust LFO _Patch_ param's, to make persistent.
+
+Added 'Master Tune' UI function & MIDI support for Master Tune param.
+
+
+v1.00  22-11-2025  [released to GitHub]
+```````````````````````````````````````
+If LFO Depth is adjusted using LFO Depth pot, maximum value is 100 cents;
+otherwise, max. is 200 cents.
+
+Fix a bug in 'Master Tune' UI screen: The word "cents" was partly erased.
+
+
+
 --------------------------------------------------------------------------------
 
 To Do:  
 ```````
-> Improve response time and noise immunity of slider pots.
-  Reduce pot service interval to 1ms; read 1 pot per call => read cycle = 10ms;
-  apply IIR filter with K = 1/2 for settling time = 10ms x 5 = 50ms (approx).
-
-> Support LFO control pots: LFO Freq, LFO Depth... real-time control.
-
-> Add "N-key rollover"...  
-  If a Note-On message is received while all voice channels are busy,
-  the oldest note will be terminated and the new note will be initiated
-  after a 5ms delay.
-
 > Add 32 more presets to provide a methodical selection of various patch 
   parameters not adjustable from the Master controller; i.e:
   Osc. freq mult. (x6), Osc. modulation source (x6), Osc. Detune (x6).
@@ -142,11 +167,15 @@ To Do:
 > Add PATCH screens to adjust Contour Env (Slope & Ramp time), Transient Env
   (Decay time and Sustain level) and LFO AM Depth parameters.
 
-```
 > Add LFO synchronization option -- keep all voices LFOs in phase.
 
 > Add HOLD (sustain) function... control by ext. switch/pedal or MIDI msg.
-  (Will need revision of voice firmware.)
+
+  When HOLD is activated, all voices ENV Sustain level is set to 70% (TBD) 
+  and Release time is set to 2000ms (TBD). When HOLD is de-activated, 
+  all voices ENV Sustain and Release param's are restored to Preset levels.
+  Voice ENV param changes are temporary only... the master Patch param's
+  are not changed by the Hold/Sustain function.
 
 > Add "multi-timbral" option -- for use with DAW/sequencer, as follows:
 
