@@ -21,7 +21,7 @@
 #include <Wire.h>
 #include <SPI.h>
 
-#define FIRMWARE_VERSION  "0.90"
+#define FIRMWARE_VERSION  "1.00"
 
 #define NUMBER_OF_VOICES   6  // Set according to hardware configuration
 
@@ -58,6 +58,9 @@
 #define FALSE  0
 #define TRUE  (!FALSE)
 #endif
+
+#define DO_NOTHING()   {;}
+
 
 typedef struct table_of_configuration_params
 {
@@ -122,13 +125,18 @@ bool     g_DisplayEnabled;      // True if OLED display initialized OK
 bool     g_MidiRxSignal;        // Signal MIDI message received (for GUI icon)
 bool     g_EEpromFaulty;        // True if EEPROM error or not fitted
 bool     g_MonophonicTestMode;  // True in monophonic test mode (e.g. voice tuning)
-uint8_t  g_VoiceUnderTest;      // Voice/channel # in monophonic test mode
+uint8_t  g_LastChannel;         // Last channel/voice allocated a note
+uint8_t  g_VoiceUnderTest;      // Voice-channel # in monophonic test mode
+uint8_t  g_NotePending;         // Note number of deferred Note-On (0 = none)
+uint8_t  g_ChannelPending;      // Voice-channel to use for Note Pending
+uint8_t  g_VelocityPending;     // Key velocity of deferred Note-On
+uint32_t g_NoteOnDelayBegin;    // Captured time (ms)
 
 //---------------------------------------------------------------------------------------
 
 void  setup()
 {
-  uint8_t  n;
+  short  n;
 
   Serial.begin(57600);         // initialize USB port for serial CLI
   Serial1.begin(31250);        // initialize UART for MIDI IN/OUT
@@ -168,26 +176,8 @@ void  setup()
 
   if (g_Config.MidiChannel == 0)  g_MidiMode = OMNI_ON;
   else  g_MidiMode = OMNI_OFF;
-
-  // Initialize the voice modules ............
-  MIDI_SendProgramChange(BROADCAST, g_Config.PresetLastSelected);  // Recall last preset
-  MIDI_SendControlChange(BROADCAST, 68, 0);   // Legato Mode: always Disabled
-  MIDI_SendControlChange(BROADCAST, 86, 2);   // Ampld Control: always ENV1*VELO
-  MIDI_SendControlChange(BROADCAST, 89, g_Config.ReverbMix_pc);
-  MIDI_SendControlChange(BROADCAST, 88, g_Config.PitchBendEnable);
-  // If pitch bend enabled, send MIDI msg to disable vibrato, and vice-versa...
-  if (g_Config.PitchBendEnable) MIDI_SendControlChange(BROADCAST, 87, 0);   // Vibrato disabled
-  else  MIDI_SendControlChange(BROADCAST, 87, 3);   // Vibrato auto-ramp
-  // The following 2 messages must be sent in sequence...
-  MIDI_SendControlChange(BROADCAST, 100, 0);  // Reg. Param 0 = Pitch-Bend range
-  MIDI_SendControlChange(BROADCAST, 38, g_Config.PitchBendRange);  // Data Entry
-
-  for (n = 0; n < NUMBER_OF_VOICES; n++)
-  {
-    g_channelStatus[n] = GATE_OFF;
-    MIDI_SendControlChange(n+1, 100, 1);  // Reg. Param 1 = Fine Tuning
-    MIDI_SendControlChange(n+1, 38, g_Config.VoiceTuning[n]);  // Data Entry
-  }
+  
+  for (n = 0; n < NUMBER_OF_VOICES; n++)  g_channelStatus[n] = GATE_OFF;
 
   g_NumberOfPresets = GetNumberOfPresets();
   PresetSelect(g_Config.PresetLastSelected);
@@ -200,14 +190,21 @@ void  setup()
 void  loop()
 {
   static uint32_t startPeriod_5ms, startPeriod_50ms, count_to_10;
+  static uint32_t lastMillisec;
 
   MidiInputService();
   ServicePortRoutine();
 
+  if (millis() != lastMillisec)  // 1ms interval ended
+  {
+    lastMillisec = millis();
+    PotService();
+  }
+
   if ((millis() - startPeriod_5ms) >= 5)  // 5ms period ended
   {
     startPeriod_5ms = millis();
-    PotService();
+    // No task to execute here yet, but keep this place-holder
   }
 
   if ((millis() - startPeriod_50ms) >= 50)  // 50ms period ended
@@ -219,6 +216,42 @@ void  loop()
     if (count_to_10 == 0)  GPIOA_PIN_SET_LOW(TX_LED);   // Heartbeat LED on
     if (count_to_10 == 2)  GPIOA_PIN_SET_HIGH(TX_LED);  // Heartbeat LED off
     if (++count_to_10 == 10) count_to_10 = 0;  // Reset heartbeat LED period
+  }
+}
+
+
+// Wait 5 seconds (min.) after power-on/reset before calling this function
+// to allow voice modules time to start up.  Called from UI screen 'Startup'
+//
+void  InitializeVoiceModules()
+{
+  MIDI_SendControlChange(BROADCAST, 86, 2);   // Ampld Control: always ENV1*VELO
+  MIDI_SendControlChange(BROADCAST, 89, g_Config.ReverbMix_pc);
+  MIDI_SendControlChange(BROADCAST, 88, g_Config.PitchBendEnable);
+  // If pitch bend enabled, send MIDI msg to disable vibrato, and vice-versa...
+  if (g_Config.PitchBendEnable) MIDI_SendControlChange(BROADCAST, 87, 0);   // Vibrato disabled
+  else  MIDI_SendControlChange(BROADCAST, 87, 3);   // Vibrato auto-ramp
+  // The following 2 messages must be sent in sequence...
+  MIDI_SendControlChange(BROADCAST, 100, 0);  // Reg. Param 0 = Pitch-Bend range
+  MIDI_SendControlChange(BROADCAST, 38, g_Config.PitchBendRange);  // Data Entry
+  // Send fine tuning param's to voice modules
+  ExecuteVoiceTuning();
+  MIDI_SendProgramChange(BROADCAST, g_Config.PresetLastSelected);
+}
+
+
+void  ExecuteVoiceTuning()
+{
+  short  voice, tuningValue;
+
+  for (voice = 0;  voice < NUMBER_OF_VOICES;  voice++)
+  {
+    tuningValue = (short) g_Config.VoiceTuning[voice] - 64;  // signed (0 +/- 60 cents)
+    tuningValue += (short) g_Config.MasterTuneOffset - 64;
+    if (tuningValue < -60)  tuningValue = 0 - 60;  // min.
+    if (tuningValue > 60)  tuningValue = 60;  // max.
+    MIDI_SendControlChange(voice+1, 100, 1);  // Reg. Param 1 = Fine Tuning
+    MIDI_SendControlChange(voice+1, 38, (uint8_t)(tuningValue + 64));
   }
 }
 
@@ -303,8 +336,8 @@ void  MidiInputService()
   static  short  msgBytesExpected;
   static  short  msgByteCount;
   static  short  msgIndex;
-  static  uint8_t  msgStatus;     // last command/status byte rx'd
-  static  bool   msgComplete;   // flag: got msg status & data set
+  static  uint8_t  msgStatus;  // last command/status byte rx'd
+  static  bool   msgComplete;  // flag: got msg status & data set
 
   uint8_t  msgByte;
   uint8_t  msgChannel;  // 1..16 !
@@ -367,12 +400,20 @@ void  MidiInputService()
       }
     }
   }
+
+  // Check for deferred Note-On pending and delay-time expired:
+  if (g_NotePending && (millis() - g_NoteOnDelayBegin) >= 5)  // 5ms up
+  {
+    MIDI_SendNoteOn(g_ChannelPending+1, g_NotePending, g_VelocityPending);
+    g_channelStatus[g_ChannelPending] = g_NotePending;
+    g_LastChannel = g_ChannelPending;
+    g_NotePending = 0;  // signal done
+  }
 }
 
 
 void  ProcessMidiMessage(uint8_t *midiMessage, short msgLength)
 {
-  static uint8_t  lastChannel;  // last channel/voice allocated a note
   uint8_t  statusByte = midiMessage[0] & 0xF0;
   uint8_t  noteNumber = midiMessage[1];
   uint8_t  velocity = midiMessage[2];
@@ -381,7 +422,8 @@ void  ProcessMidiMessage(uint8_t *midiMessage, short msgLength)
   bool     executeNoteOff = FALSE;
   bool     executeNoteOn = FALSE;
   uint8_t  count = 0;
-  uint8_t  voice = lastChannel;
+  uint8_t  voice = g_LastChannel;
+  uint8_t  oldestNote;
 
   switch (statusByte)
   {
@@ -422,6 +464,7 @@ void  ProcessMidiMessage(uint8_t *midiMessage, short msgLength)
       MIDI_SendNoteOff(voice+1, noteNumber);
       return;
     }
+
     // Normal polyphonic mode...
     for (voice = 0;  voice < NUMBER_OF_VOICES;  voice++)
     {
@@ -442,8 +485,9 @@ void  ProcessMidiMessage(uint8_t *midiMessage, short msgLength)
       MIDI_SendNoteOn(voice+1, noteNumber, velocity);
       return;
     }
+
     // Normal polyphonic mode...
-    voice = lastChannel + 1;  // oldest channel last active
+    voice = g_LastChannel + 1;  // oldest channel last active
     for (count = 0; count < NUMBER_OF_VOICES; count++, voice++)
     {
       if (voice >= NUMBER_OF_VOICES) voice = 0;  // wrap
@@ -451,13 +495,22 @@ void  ProcessMidiMessage(uint8_t *midiMessage, short msgLength)
       {
         MIDI_SendNoteOn(voice+1, noteNumber, velocity);
         g_channelStatus[voice] = noteNumber;
-        lastChannel = voice;
+        g_LastChannel = voice;
         break;  // activate one voice only
       }
     }
-    // todo: If all channels are busy (gated), terminate the oldest note, 
-    // i.e. the note playing in (lastChannel + 1) % g_Config.NumberOfVoices;
-    // then initiate the new note in that channel, deferred by 5ms.
+    // Following code implements "N-key rollover" algorithm:
+    if (count == NUMBER_OF_VOICES)  // all channels are busy (gated)...
+    {
+      voice = (g_LastChannel + 1) % NUMBER_OF_VOICES;  // oldest used
+      oldestNote = g_channelStatus[voice];
+      MIDI_SendNoteOff(voice+1, oldestNote);  // Terminate the oldest note
+      g_channelStatus[voice] = GATE_OFF;  // voice is now free to use
+      g_ChannelPending = voice;
+      g_NotePending = noteNumber;  // Initiate deferred Note-On
+      g_VelocityPending = velocity;
+      g_NoteOnDelayBegin = millis();
+    }
   }
 }
 
@@ -484,16 +537,12 @@ void  ProcessControlChange(uint8_t *midiMessage)
     if (g_MidiRegisParam == 0x01)  // Master Tune param
     {
       g_Config.MasterTuneOffset = dataByte;
-      // todo: Adjust each voice fine-tuning param according to g_Config.MasterTuneOffset
       StoreConfigData();
-      // todo: Send individual fine-tuning param's to voice modules.
+      ExecuteVoiceTuning();
     }
   }
-  else if (CCnumber == 80) { ; }  // Set Osc. mixer level - blocked (TX only)
-  else if (CCnumber == 112) { ; }  // LFO phase sync. - blocked (TX only)
-  // else...
-  // Pass message through to all voice-channels...
-  else  MIDI_SendControlChange(BROADCAST, CCnumber, dataByte);
+  else if (CCnumber == 80) { ; }   // Set Osc. mixer level - blocked
+  else if (CCnumber == 112) { ; }  // LFO phase sync. - blocked
 }
 
 
@@ -604,7 +653,7 @@ void  DefaultConfigData(void)
   g_Config.PitchBendRange = 2;       // semitones (max. 12)
   g_Config.ReverbMix_pc = 15;        // 0..100 % (typ. 15)
   g_Config.PresetLastSelected = 1;
-  g_Config.MasterTuneOffset = 0;
+  g_Config.MasterTuneOffset = 64;    // 64 represents zero
   g_Config.DisplayBrightness = 30;   // %
   g_Config.EEpromCheckWord = 0xABCDE090;
 
@@ -810,7 +859,7 @@ bool  GetCommandLine(char *buffer, uint8_t maxlen)
 		}
 		else if (rxb == ASCII_CAN || rxb == ASCII_ESC)  // Cancel line
 		{
-			Serial.print(" ^X^ \n");
+			Serial.print(" ^X^ \r\n");
 			Serial.print("> ");        // prompt
 			index = 0;
 			count = 0;
@@ -847,9 +896,10 @@ void  ServicePortRoutine()
       if (strMatch(cmdName, "help"))  HelpCommand();
       else if (strMatch(cmdName, "patch"))  PatchCommand();
       else if (strMatch(cmdName, "save"))  SaveCommand();
+	  else if (strMatch(cmdName, "sysinfo"))  SysInfoCommand();  // Hidden cmd!
       else  Serial.println("! Undefined command !");
     }
-    Serial.print("\n> ");  // prompt
+    Serial.print("\r\n> ");  // prompt
   }
 }
 
@@ -858,7 +908,7 @@ void  HelpCommand()
 {
   Serial.println("Command usage:");
   Serial.println("``````````````");
-  Serial.println("help     | Show this info. ");
+  Serial.println("help     | Show available commands ");
   Serial.println("patch    | List active patch param's ");
   Serial.println("save  <fav#>  [name]   | Save active patch as Fav. Preset");
   Serial.println("... where <fav#> = Fav. Preset number (1..8) ");
@@ -889,6 +939,27 @@ void  SaveCommand()
   g_PatchModified = FALSE;  // redundant -- for clarity
   Disp_ClearScreen();
   GoToNextScreen(HOME_SCREEN_ID);  // Refresh Home screen
+}
+
+
+void  SysInfoCommand()  // Hidden
+{
+  static uint16_t *SYSCTRL_XOSC32K = (uint16_t *)0x40000814;  // register address	
+  static uint32_t *GCLK_GENCTRL = (uint32_t *)0x40000C04;  // register address	
+  uint32_t  clockSource = (*GCLK_GENCTRL >> 8) & 0x1F;  // bits 12:8
+
+/***  Deprecated (retired) code ... no longer useful !
+  Serial.print("SYSCTRL->XOSC32K reg: ");  
+  Serial.print((uint32_t)*SYSCTRL_XOSC32K, HEX);
+  if (*SYSCTRL_XOSC32K & 0x02)  Serial.print("  [bit2 = 1 => XOSC32K Enabled]");
+  else  Serial.print("  bit2 = 0 -> XOSC32K Disabled");
+  Serial.print("\r\n");
+  Serial.print("GCLK->GENCTRL reg: ");  
+  Serial.print((uint32_t)*GCLK_GENCTRL, HEX);
+  if (clockSource == 5)  Serial.print("  [Clock source = 5 => XOSC32K]");
+  if (clockSource == 6)  Serial.print("  [Clock source = 6 => OSC8M]");
+  Serial.print("\r\n");
+***/  
 }
 
 
@@ -953,39 +1024,39 @@ void  ListActivePatch(void)
 {
     char   numBuf[20];
     
-    Serial.print("\n    ");
+    Serial.print("\r\n    ");
     Serial.print(QUOTE);
     Serial.print((char *) g_Patch.PresetName);
     Serial.print(QUOTE);
-    Serial.print("\n");
+    Serial.print("\r\n");
 
     ListParamsFromArray((short *) &g_Patch.OscFreqMult[0], 6, 1);
-    Serial.print("Osc Freq. Mult index (0..11)\n");
+    Serial.print("Osc Freq. Mult index (0..11)\r\n");
     
     ListParamsFromArray((short *) &g_Patch.OscAmpldModSource[0], 6, 1);
-    Serial.print("Osc Modulation source (0..9)\n");
+    Serial.print("Osc Modulation source (0..9)\r\n");
     
     ListParamsFromArray((short *) &g_Patch.OscDetune[0], 6, 1);
-    Serial.print("Osc Detune, cents (+/-600)\n");
+    Serial.print("Osc Detune, cents (+/-600)\r\n");
     
     ListParamsFromArray((short *) &g_Patch.MixerInputStep[0], 6, 1);
-    Serial.print("Osc Mixer level/step (0..15)\n");
+    Serial.print("Osc Mixer level/step (0..15)\r\n");
     
     ListParamsFromArray((short *) &g_Patch.EnvAttackTime, 6, 0);
-    Serial.print("Ampld Env (A-H-D-S-R), Amp Mode \n");
+    Serial.print("Ampld Env (A-H-D-S-R), Amp Mode \r\n");
     
     ListParamsFromArray((short *) &g_Patch.ContourStartLevel, 4, 0);
-    Serial.print("Contour Env (S-D-R-H) \n");
+    Serial.print("Contour Env (S-D-R-H) \r\n");
     
     ListParamsFromArray((short *) &g_Patch.Env2DecayTime, 2, 0);
-    Serial.print("ENV2: Decay/Rel, Sus % \n");
+    Serial.print("ENV2: Decay/Rel, Sus % \r\n");
     
     ListParamsFromArray((short *) &g_Patch.LFO_Freq_x10, 4, 0);
-    Serial.print("LFO: Hz x10, Ramp, FM %, AM %\n");
+    Serial.print("LFO: Hz x10, Ramp, FM %, AM %\r\n");
     
     ListParamsFromArray((short *) &g_Patch.MixerOutGain_x10, 2, 0);
-    Serial.print("Mixer Gain x10, Limit %FS\n");
-    Serial.print("\n");
+    Serial.print("Mixer Gain x10, Limit %FS\r\n");
+    Serial.print("\r\n");
 }
 
 
