@@ -1,7 +1,7 @@
 # 'Sigma-6' Polyphonic Synthesizer
 __DIY Digital Polyphonic Synthesizer using unique Additive Synthesis technique__
 
-![Enclosure-fully-assembled-pic1-web](https://github.com/user-attachments/assets/ea9499f4-f3a8-4970-86af-4bf1e72e70ff)
+![Sigma-6-Poly-synth-profile](https://github.com/user-attachments/assets/de2b180a-744f-4f6d-af62-0a37b76fa0b2)
 
 For details of concept, design, construction and operation, please refer to the project web page, here...  
 https://www.mjbauer.biz/Sigma6_Poly_synth_weblog.htm
