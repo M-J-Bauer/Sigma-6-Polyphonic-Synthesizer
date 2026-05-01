@@ -12,9 +12,17 @@ Download and install the latest version of Arduino IDE on your PC and follow the
 
 [Arduino IDE Setup](https://learn.adafruit.com/introducing-itsy-bitsy-m0/setup)
 
-Select board type __Arduino Zero (Native USB)__ if it is not already auto-detected by Arduino IDE. This is preferable
-to the Adafruit SAMD21 board package, especially for the Poly-voice firmware, because the Arduino Zero startup code enables the 32.768kHz crystal oscillator for
-the MCU system clock. The Adafruit ItsyBitsy M0 board uses the MCU internal 8MHz RC oscillator which is not as precise or stable.
+Install the __Adafruit SAMDxx Boards Manager__. When you connect a board to your computer, Arduino IDE tries to determine
+the board type automatically, but in any case be sure to select the correct board type as follows...
+
+To compile the code for the Master Controller, select board type __ItsyBitsy M0 Express)__ regardless of the actual
+MCU type fitted (Robotdyn SAMD21 Mini). This is necessary because the Arduino Zero (Native USB) board package does not
+support analog inputs A8, A9, A11, etc. However, these analog pins are supported by the Adafruiit SAMD21 M0 board package.
+
+To compile the code for the Poly-voice Modules, select board type __Arduino Zero (Native USB)__.  This is preferable
+to the Adafruit M0 Express option, especially for the Poly-voice firmware, because the Arduino Zero startup code enables
+the 32.768kHz crystal oscillator for the MCU system clock. The Adafruit ItsyBitsy M0 board uses the MCU internal 8MHz 
+RC oscillator which is not as precise or stable.
 
 To build the Sigma-6 Poly-voice firmware, you also need to install a "fast timer" library in the Arduino IDE.
 Open the Arduino Library Manager. From the 'Type' drop-down list, choose 'All'. In the 'Filter' box, write "fast_samd21_tc"
@@ -44,14 +52,14 @@ Steps to compile and "upload" the __Sigma-6 Poly Master__ firmware:
       all source files into the editor window. (Alternatively, open Arduino IDE first, then open the
       source file "Sigma_6_Poly_master.ino".)
     > Connect the Master MCU to your computer USB port.
-    > Select board type 'Arduino Zero (Native USB)' as noted above.
+    > Select board type 'Adafruit ItsyBitsy M0 Express' as noted above.
     > Make any required changes to the source code to suit your synth configuration.*
     > Compile the code and upload the firmware to your Sigma-6 Master Controller MCU.
 
 * Edit any applicable #define lines in the main file "Sigma_6_Poly_master.ino" (see comments therein);
   in particular to specify the total number of voices implemented in your build.
 
-NB: It may be necessary to reset the MCU and/or unplug and reconnect the USB cable to get the bootloader to start, after
-which it may also be necessary to re-select the board type and/or USB-serial port in the drop-down box in Arduino IDE.
+NB: It may be necessary to re-select the board type and/or USB-serial port in the drop-down box in Arduino IDE,
+or to reset the MCU, or to unplug and reconnect the USB cable to get the bootloader to start. This is normal for Arduino!
 
 ![Coded-by-a-Human-no-AI](https://github.com/user-attachments/assets/e2479440-66a7-4c50-b6dd-358b75b23dfc)
