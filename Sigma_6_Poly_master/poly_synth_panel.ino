@@ -23,6 +23,11 @@
 #define LFO_FREQ_POT    A8   // LFO (vibrato) frequency pot
 #define LFO_DEPTH_POT   A9   // LFO (vibrato) depth pot
 #define LED_REG_LE      2    // LED register 'LE' (D4 on Robotdyn M0)
+#define HOLD_LED        42   // Hold LED drive line (active High)
+
+#define HOLD_LED_CONFIGURE()  pinMode(HOLD_LED, OUTPUT)
+#define HOLD_LED_OFF()        digitalWrite(HOLD_LED, 0)
+#define HOLD_LED_ON()         digitalWrite(HOLD_LED, 1)
 
 extern ConfigParams_t  g_Config;  // structure holding config param's
 extern PatchParamTable_t  g_Patch;   // Active patch param's
@@ -40,8 +45,10 @@ enum User_Interface_States  // aka 'Screen identifiers'
   SET_PITCH_BEND,
   SET_REVERB_LEVEL,
   SET_MIDI_CHAN,
+  SET_VOICE_CONFIG,
+  SET_MONO_PRESETS,
   SET_DISP_BRIGHT,
-  SET_MASTER_TUNE,  // todo  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  SET_MASTER_TUNE,
   SET_VOICE_TUNING,
   // patch ...
   SET_MIXER_LEVELS,
@@ -70,7 +77,7 @@ bitmap_t sigma_6_icon_24x21[] = {
 
 /*
  * Bitmap image definition
- * Image name: config_icon_7x7,  width: 7, height: 7 pixels
+ * Image name: config_icon_9x9,  width: 7, height: 7 pixels
  */
 bitmap_t config_icon_9x9[] = {
   0x14, 0x00, 0x5D, 0x00, 0x22, 0x00, 0xC1, 0x80, 0x41, 0x00, 0xC1, 0x80, 0x22, 0x00,
@@ -126,10 +133,10 @@ const uint8_t  percentLogScale[] =       // 16 values, 3dB log scale (approx.)
 
 const uint16_t  timeValueQuantized[] =     // 16 values, logarithmic scale
         { 0, 10, 20, 30, 50, 70, 100, 200, 300, 500, 700, 1000, 1500, 2000, 3000, 5000 };
-		
+
 const uint8_t  oscFreqMultConst[] =     // Dummy values at idx = 0, 2, 3 (non-integer)
         { 0, 1, 0, 0, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0 };
-		
+
 
 //===================   P U S H - B U T T O N   F U N C T I O N S  ======================
 //
@@ -499,6 +506,8 @@ void  GoToNextScreen(uint8_t screenID)
  */
 void  UserInterfaceTask(void)
 {
+  static bool  isHoldSustainActive;
+  
   if (screenSwitchReq)  // Screen switch requested
   {
     screenSwitchReq = FALSE;
@@ -522,6 +531,8 @@ void  UserInterfaceTask(void)
     case SET_PITCH_BEND:     UserState_SetPitchBend();       break;
     case SET_REVERB_LEVEL:   UserState_SetReverbLevel();     break;
     case SET_MIDI_CHAN:      UserState_SetMidiChannel();     break;
+    case SET_VOICE_CONFIG:   UserState_SetVoiceConfig();     break;
+    case SET_MONO_PRESETS:   UserState_SetMonoPresets();     break;
     case SET_DISP_BRIGHT:    UserState_SetDisplayBright();   break;
     case SET_MASTER_TUNE:    UserState_SetMasterTune();      break;
     case SET_VOICE_TUNING:   UserState_SetVoiceTuning();     break;
@@ -538,8 +549,24 @@ void  UserInterfaceTask(void)
     case SET_MIXER_GAIN:     UserState_Set_MixerGain();      break;
     case SET_LIMITER_LVL:    UserState_Set_LimiterLevel();   break;
   }
-  
+
   isNewScreen = FALSE;  // New screen prep done
+  
+  if (ButtonHit('D'))  // Toggle Hold/Sustain state
+  {
+    if (isHoldSustainActive) 
+    {
+      MIDI_SendControlChange(BROADCAST, 64, 0);  // Hold Off
+      isHoldSustainActive = FALSE;
+      HOLD_LED_OFF();
+    }
+    else
+    {
+      MIDI_SendControlChange(BROADCAST, 64, 100);  // Hold On
+      isHoldSustainActive = TRUE;
+      HOLD_LED_ON();
+    }
+  }
 }
 
 
@@ -556,9 +583,9 @@ void  UserState_StartupScreen()
   if (isNewScreen)
   {
     led = stateTimer = 0;
-    if (g_EEpromFaulty && !doneEEpromCheck)  // EEPROM check... One time only
+    if ((g_EEpromFaulty || g_EEpromDefault) && !doneEEpromCheck)  // EEPROM check... One time only
     {
-      DisplayTitleBar("    EEPROM Fault");
+      DisplayTitleBar("    EEPROM Error");
       Disp_SetFont(PROP_12_BOLD);
       Disp_PosXY(4, 0);
       Disp_PutText("<!>");
@@ -576,19 +603,18 @@ void  UserState_StartupScreen()
     Disp_PutText("Firmware version: ");
     Disp_SetFont(MONO_8_NORM);
     Disp_PutText(FIRMWARE_VERSION);
-    Disp_SetFont(PROP_8_NORM);
-
+    
     Disp_PosXY(4, 28);  // info line 2
+    Disp_SetFont(PROP_8_NORM);
     Disp_PutText("MIDI IN chan: ");
     Disp_SetFont(MONO_8_NORM);
-    if (g_MidiMode == OMNI_ON) Disp_PutText("Omni On");
-    else  Disp_PutDecimal(g_Config.MidiChannel, 1);
+    Disp_PutDecimal(g_Config.MidiChannel, 1);
     Disp_SetFont(PROP_8_NORM);
 
     Disp_PosXY(4, 40);  // info line 3
     Disp_PutText("Voices: ");
     Disp_SetFont(MONO_8_NORM);
-    Disp_PutDecimal(NUMBER_OF_VOICES, 1);
+    Disp_PutDecimal(TOTAL_NUMBER_OF_VOICES, 1);
     Disp_SetFont(PROP_8_NORM);
     Disp_PutText(",  Presets: ");
     Disp_SetFont(MONO_8_NORM);
@@ -603,16 +629,16 @@ void  UserState_StartupScreen()
   if (ButtonHit('A'))  ;  // exit = TRUE;  // Home ?
   if (ButtonHit('B'))  ;  // exit = TRUE;  // Home ?
   if (ButtonHit('C') && !g_EEpromFaulty)  // goto 'Default Config' prompt screen...
-  { 
-    ButtonLEDstate(88, OFF);  
-    GoToNextScreen(CONFIRM_DEFAULT); 
+  {
+    ButtonLEDstate(88, OFF);
+    GoToNextScreen(CONFIRM_DEFAULT);
   }
 
   if (cycle < 4)  ButtonLEDstate(led, ON);  // Favorites LED chaser...
-  if (cycle == 4)  ButtonLEDstate(88, OFF);  
+  if (cycle == 4)  ButtonLEDstate(88, OFF);
   if (++led >= 8)  { led = 0;  cycle++; }
- 
-  if (g_EEpromFaulty && !doneEEpromCheck)
+
+  if ((g_EEpromFaulty || g_EEpromDefault) && !doneEEpromCheck)
   {
     if (++stateTimer > 40)   // 2 sec time-out
     {
@@ -623,11 +649,13 @@ void  UserState_StartupScreen()
   }
   else if (++stateTimer > 100) exit = TRUE;  // 5 sec time-out
 
-  if (exit) 
-  { 
+  if (exit)
+  {
     InitializeVoiceModules();
-    ButtonLEDstate(88, OFF);  
-    GoToNextScreen(HOME_SCREEN); 
+    ButtonLEDstate(88, OFF);
+    HOLD_LED_CONFIGURE();
+    HOLD_LED_OFF();
+    GoToNextScreen(HOME_SCREEN);
   }
 }
 
@@ -675,10 +703,10 @@ void  UserState_ConfirmDefault()
 
   if (affirmed)  // waiting 1.5 sec to view message
   {
-    if (timeSinceAffirm_ms >= 1500)  
+    if (timeSinceAffirm_ms >= 1500)
     {
       InitializeVoiceModules();
-      ButtonLEDstate(88, OFF);  
+      ButtonLEDstate(88, OFF);
       GoToNextScreen(HOME_SCREEN);
     }
     timeSinceAffirm_ms += 50;
@@ -724,9 +752,9 @@ void  UserState_HomeScreen()
 
     LFOFreqPotMoved();  // clear 'pot moved' flag
     LFODepthPotMoved();  // clear 'pot moved' flag
-    for (osc = 0;  osc < 6;  osc++)  
+    for (osc = 0;  osc < 6;  osc++)
       SliderPotMoved(osc);  // clear 'pot moved' flags
-    
+
     lastPresetShown = 255;  // force refresh
     lastFavShown = 255;
     midiIconVisible = FALSE;
@@ -752,7 +780,7 @@ void  UserState_HomeScreen()
   for (osc = 0;  osc < 6;  osc++)  // Monitor Slider Pots
     if (SliderPotMoved(osc))  GoToNextScreen(SET_MIXER_LEVELS);
 
-  // Monitor LFO control pots 
+  // Monitor LFO control pots
   if (LFOFreqPotMoved())  GoToNextScreen(SET_LFO_FREQ);
   if (LFODepthPotMoved())  GoToNextScreen(SET_LFO_DEPTH);
 
@@ -814,11 +842,9 @@ void  UserState_HomeScreen()
 
 void  UserState_PresetSelect()
 {
-  static uint32_t timeSinceLastRefresh_ms;  // unit = ms
   static uint8_t  bank, setting;
-  static bool settingChanged;
-  uint8_t numBanks = (g_NumberOfPresets + 15) / 16;  // 16 presets per bank
-  bool doRefresh = FALSE;
+  uint8_t  numBanks = (g_NumberOfPresets + 15) / 16;  // 16 presets per bank
+  bool  doRefresh = FALSE;
 
   if (isNewScreen)
   {
@@ -833,7 +859,6 @@ void  UserState_PresetSelect()
     Disp_PutText("Bank");
     setting = g_Config.PresetLastSelected;
     bank = setting / 16;  // 0, 1, 2...
-    settingChanged = TRUE;  // signal to refresh preset shown
     doRefresh = TRUE;
   }
 
@@ -841,20 +866,18 @@ void  UserState_PresetSelect()
   {
     setting = DataPotPosition() / 16 + (bank * 16);
     if (setting >= g_NumberOfPresets) setting = g_NumberOfPresets - 1;
-    settingChanged = TRUE;
     doRefresh = TRUE;
   }
 
-  if (ButtonHit('A')) GoToNextScreen(HOME_SCREEN);  // no change
+  if (ButtonHit('A')) GoToNextScreen(HOME_SCREEN);  // Exit
   if (ButtonHit('B'))  // Next bank
   {
     if (++bank >= numBanks) bank = 0;
     setting = DataPotPosition() / 16 + (bank * 16);
     if (setting >= g_NumberOfPresets) setting = g_NumberOfPresets - 1;
-    settingChanged = TRUE;
     doRefresh = TRUE;
   }
-  if (ButtonHit('C'))  // Affirm new setting
+  if (ButtonHit('C'))  // Affirm
   {
     PresetSelect(setting);
     g_FavoriteSelected = 0;  // redundant, for clarity only
@@ -866,54 +889,55 @@ void  UserState_PresetSelect()
   if (doRefresh)
   {
     Disp_SetFont(MONO_16_NORM);
-    Disp_PosXY(48, 20);  // Display preset #
+    Disp_PosXY(48, 20);  // Display preset ID number
     Disp_BlockClear(40, 16);
     Disp_PutDecimal(setting, 2);
     Disp_SetFont(PROP_12_BOLD);
     Disp_PosXY(112, 26);  // Show bank #
     Disp_BlockClear(8, 10);
     Disp_PutDecimal(bank+1, 1);
-    timeSinceLastRefresh_ms = 0;  // reset timer
-  }
-
-  if (settingChanged && timeSinceLastRefresh_ms >= 200)
-  {
+    // Print Preset name
     Disp_SetFont(PROP_8_NORM);
     Disp_PosXY(8, 38);
     Disp_BlockClear(120, 8);  // erase existing line
-    Disp_PutText((char *)g_PresetPatch[setting].PresetName);  
-    settingChanged = FALSE;  // prevent repeat refresh
-    timeSinceLastRefresh_ms = 0;
+    Disp_PutText((char *)g_PresetPatch[setting].PresetName);
+    doRefresh = FALSE;
   }
-
-  timeSinceLastRefresh_ms += 50;  // Call period is 50ms
 }
 
 
 void  UserState_SetupMenu()
 {
-  static const char *selectionName[] = { "User Preset", "Pitch Bend", "Reverb", 
-          "MIDI channel", "Brightness", "Master Tune", "Voice Tuning" };
+  static const char *selectionName[] = { "User Preset", "Pitch Bend", "Reverb",
+      "MIDI channel", "Voice Config", "Brightness", "Master Tune", "Voice Tuning" };
   static uint8_t  item;
   bool  doRefresh = FALSE;
 
   if (isNewScreen)
   {
     DisplayTitleBar("   SETUP MENU");
+    Disp_PosXY(116, 18);
+    Disp_PutImage(config_icon_9x9, 9, 9);  // Config icon
     Disp_SetFont(PROP_8_NORM);
     Disp_PosXY(4, 18);
-    Disp_PutText("Selected item:");
+    Disp_PutText("Select item:");
     DisplayButtonLegend(BUTT_POS_A, "Exit");
     DisplayButtonLegend(BUTT_POS_B, "Item>");
     DisplayButtonLegend(BUTT_POS_C, "Enter");
     item = 0;  // always start with User Patch screen
     doRefresh = TRUE;
   }
+  
+  if (DataPotMoved())
+  {
+    item = DataPotPosition() >> 5;  // 0..7
+    doRefresh = TRUE;
+  }
 
   if (ButtonHit('A')) GoToNextScreen(HOME_SCREEN);
   if (ButtonHit('B'))
   {
-    item = (item + 1) % 7;  // 0..6
+    item = (item + 1) % 8;  // 0..7
     doRefresh = TRUE;
   }
   if (ButtonHit('C'))  // Enter selected screen...
@@ -924,9 +948,10 @@ void  UserState_SetupMenu()
       case 1:  GoToNextScreen(SET_PITCH_BEND);    break;
       case 2:  GoToNextScreen(SET_REVERB_LEVEL);  break;
       case 3:  GoToNextScreen(SET_MIDI_CHAN);     break;
-      case 4:  GoToNextScreen(SET_DISP_BRIGHT);   break;
-      case 5:  GoToNextScreen(SET_MASTER_TUNE);   break; 
-      case 6:  GoToNextScreen(SET_VOICE_TUNING);  break; 
+      case 4:  GoToNextScreen(SET_VOICE_CONFIG);  break;
+      case 5:  GoToNextScreen(SET_DISP_BRIGHT);   break;
+      case 6:  GoToNextScreen(SET_MASTER_TUNE);   break;
+      case 7:  GoToNextScreen(SET_VOICE_TUNING);  break;
     }
   }
 
@@ -979,7 +1004,7 @@ void  UserState_PatchMenu()
     switch (item)  // 0..10
     {
       case  0:  GoToNextScreen(SET_MIXER_LEVELS);  break;
-      case  1:  GoToNextScreen(SET_LFO_FREQ);      break;  
+      case  1:  GoToNextScreen(SET_LFO_FREQ);      break;
       case  2:  GoToNextScreen(SET_LFO_DEPTH);     break;
       case  3:  GoToNextScreen(SET_LFO_RAMP);      break;
       case  4:  GoToNextScreen(SET_ENV_ATTACK);    break;
@@ -1044,8 +1069,7 @@ void  UserState_SetUserPreset()
     Disp_ClearScreen();
     Disp_SetFont(PROP_12_NORM);
     Disp_PosXY(32, 26);  // mid-screen
-    if (g_EEpromFaulty) Disp_PutText("EEPROM fault!");
-    else  Disp_PutText("Saved OK!");
+    Disp_PutText("Saved OK!");
     affirmed = TRUE;
     timeSinceAffirm_ms = 0;
   }
@@ -1102,7 +1126,7 @@ void  UserState_SetPitchBend()  // Set on/off or bend range
     g_Config.PitchBendEnable ^= 1;  // toggle
     g_Config.PitchBendEnable &= 1;
     StoreConfigData();
-	  // If pitch bend enabled, send MIDI msg to disable vibrato, and vice-versa...
+      // If pitch bend enabled, send MIDI msg to disable vibrato, and vice-versa...
     if (g_Config.PitchBendEnable) MIDI_SendControlChange(BROADCAST, 87, 0);   // Vibrato disabled
     else  MIDI_SendControlChange(BROADCAST, 87, 3);   // Vibrato auto-ramp
     doRefresh = TRUE;
@@ -1227,6 +1251,159 @@ void  UserState_SetMidiChannel()
 }
 
 
+void  UserState_SetVoiceConfig()
+{
+  static bool  isMessageShowing;
+  static uint32_t  messageTimeElapsed_ms;
+  static uint8_t  setting;
+  bool  doRefresh = FALSE;
+
+  if (isNewScreen)
+  {
+    DisplayTitleBar("Voice Config");
+    Disp_Mode(SET_PIXELS);
+    Disp_PosXY(116, 1);
+    Disp_PutImage(config_icon_9x9, 9, 9);  // Config icon
+    Disp_SetFont(PROP_8_NORM);
+    Disp_PosXY(0, 20);
+    Disp_PutText("Number of voices in");
+    Disp_PosXY(0, 32);
+    Disp_PutText("Polyphonic group:");
+    DisplayButtonLegend(BUTT_POS_A, "Exit");
+    DisplayButtonLegend(BUTT_POS_B, "-");
+    DisplayButtonLegend(BUTT_POS_C, "Next");
+    setting = g_Config.NumberOfPolyVoices;
+    isMessageShowing = FALSE;
+    doRefresh = TRUE;
+  }
+
+  if (DataPotMoved())
+  {
+    setting = DataPotPosition() / 20;  // 0..12
+    if (setting == 0) setting = 1;  // minimum
+    if (setting > TOTAL_NUMBER_OF_VOICES) setting = TOTAL_NUMBER_OF_VOICES;
+    doRefresh = TRUE;
+  }
+
+  if (ButtonHit('A'))  GoToNextScreen(SETUP_MENU);  // Exit
+  if (ButtonHit('B'))  DO_NOTHING();
+  if (ButtonHit('C'))  // Next -> Set Mono-voice Presets (maybe)
+  {
+    g_Config.NumberOfPolyVoices = setting;
+    StoreConfigData();
+    InitializeVoiceModules();
+    if (setting < TOTAL_NUMBER_OF_VOICES) GoToNextScreen(SET_MONO_PRESETS);
+    else  // No Mono voices configured -- show message
+    {
+      Disp_PosXY(0, 16);
+      Disp_BlockClear(128, 48);  // Erase message area
+      Disp_SetFont(MONO_8_NORM);
+      Disp_PosXY(8, 30);
+      Disp_PutText("* No Mono Voices *");
+      isMessageShowing = TRUE;
+      messageTimeElapsed_ms = 0;
+    }
+  }
+
+  if (doRefresh)
+  {
+    Disp_SetFont(MONO_16_BOLD);
+    Disp_PosXY(104, 24);
+    Disp_BlockClear(32, 14);
+    Disp_PutDecimal(setting, 1);
+  }
+
+  if (isMessageShowing)  // waiting 1.5 sec to view message
+  {
+    if (messageTimeElapsed_ms >= 1500) GoToNextScreen(SETUP_MENU);
+    messageTimeElapsed_ms += 50;
+  }
+}
+
+
+void  UserState_SetMonoPresets()  // for 'Multi-timbral' operation
+{
+  static uint8_t  bank;    // Preset bank # (0..5)
+  static uint8_t  preset;  // Preset number (0..nn)
+  static uint8_t  voice;   // Voice index (0..max)
+  uint8_t  numBanks = (g_NumberOfPresets + 15) / 16;  // 16 presets per bank
+  uint8_t  monoVoice1 = g_Config.NumberOfPolyVoices;
+  bool doRefresh = FALSE;
+
+  if (isNewScreen)
+  {
+    DisplayTitleBar("Mono Presets");
+    Disp_Mode(SET_PIXELS);
+    Disp_PosXY(116, 1);
+    Disp_PutImage(config_icon_9x9, 9, 9);
+    Disp_SetFont(MONO_8_NORM);
+    Disp_PosXY(8, 16);
+    Disp_PutText("Voice");
+    Disp_PosXY(48, 16);
+    Disp_PutText("Preset");
+    Disp_PosXY(96, 16);
+    Disp_PutText("Bank");
+    Disp_SetFont(PROP_8_NORM);
+    DisplayButtonLegend(BUTT_POS_A, "Done");  // Save and exit
+    DisplayButtonLegend(BUTT_POS_B, "Voice");
+    DisplayButtonLegend(BUTT_POS_C, "Bank");
+    bank = 0;
+    voice = monoVoice1;
+    preset = g_Config.MonoVoicePreset[voice];
+    doRefresh = TRUE;
+  }
+
+  if (DataPotMoved())
+  {
+    preset = (DataPotPosition() / 16) + (bank * 16);
+    if (preset >= g_NumberOfPresets) preset = g_NumberOfPresets - 1;
+    doRefresh = TRUE;
+  }
+  if (ButtonHit('A'))  // Done... save & exit
+  {
+    g_Config.MonoVoicePreset[voice] = preset;  // save selection
+    StoreConfigData();
+    MIDI_SendProgramChange(voice+1, preset);  // update voice module
+    GoToNextScreen(SETUP_MENU);
+  }
+  if (ButtonHit('B'))  // Next Voice
+  {
+    g_Config.MonoVoicePreset[voice] = preset;  // save selection
+    StoreConfigData();
+    MIDI_SendProgramChange(voice+1, preset);  // update voice module
+    if (++voice >= TOTAL_NUMBER_OF_VOICES) voice = monoVoice1;  // wrap
+    preset = g_Config.MonoVoicePreset[voice];
+    bank = preset / 16;  // 0..n
+    doRefresh = TRUE;
+  }
+  if (ButtonHit('C'))  // Next Bank
+  {
+    if (++bank >= numBanks) bank = 0;  // wrap
+    preset = (DataPotPosition() / 16) + (bank * 16);
+    if (preset >= g_NumberOfPresets) preset = g_NumberOfPresets - 1;
+    doRefresh = TRUE;
+  }
+
+  if (doRefresh)
+  {
+    Disp_SetFont(MONO_16_NORM);
+    Disp_PosXY(0, 26);
+    Disp_BlockClear(120, 14);  // clear data area
+    Disp_PosXY(16, 26);  // show voice number
+    Disp_PutDecimal(voice+1, 1);
+    Disp_PosXY(56, 26);  // show preset number
+    Disp_PutDecimal(preset, 2);
+    Disp_SetFont(PROP_12_NORM);
+    Disp_PosXY(104, 26);  // show bank number
+    Disp_PutDecimal(bank, 1);
+    Disp_SetFont(PROP_8_NORM);
+    Disp_PosXY(8, 43);  // show preset name
+    Disp_BlockClear(104, 8);
+    Disp_PutText((char *)g_PresetPatch[preset].PresetName);
+  }
+}
+
+
 void  UserState_SetDisplayBright()
 {
   static uint16_t  setting;
@@ -1263,7 +1440,7 @@ void  UserState_SetDisplayBright()
   {
     g_Config.DisplayBrightness = setting;  // range 0..95
     StoreConfigData();  // commit
-	GoToNextScreen(HOME_SCREEN);
+    GoToNextScreen(HOME_SCREEN);
   }
   if (ButtonHit('C'))  GoToNextScreen(SETUP_MENU);
 
@@ -1286,7 +1463,7 @@ void UserState_SetMasterTune()
   short  absValue;
   bool doRefresh = FALSE;
 
-  if (isNewScreen) 
+  if (isNewScreen)
   {
     DisplayTitleBar("Master Tune");
     Disp_Mode(SET_PIXELS);
@@ -1294,7 +1471,7 @@ void UserState_SetMasterTune()
     Disp_PutImage(config_icon_9x9, 9, 9);  // Config icon
     Disp_SetFont(MONO_8_NORM);
     Disp_PosXY(88, 31);
-    Disp_PutText("cents");  
+    Disp_PutText("cents");
     DisplayButtonLegend(BUTT_POS_A, "Cancel");
     DisplayButtonLegend(BUTT_POS_B, "-");
     DisplayButtonLegend(BUTT_POS_C, "Affirm");
@@ -1303,7 +1480,7 @@ void UserState_SetMasterTune()
     doRefresh = TRUE;
   }
 
-  if (DataPotMoved()) 
+  if (DataPotMoved())
   {
     setting = (short)DataPotPosition() - 128;  // -128 ~ +127
     if (setting >= 0)  // pot posn is right of centre
@@ -1324,7 +1501,7 @@ void UserState_SetMasterTune()
     doRefresh = TRUE;
   }
 
-  if (ButtonHit('A'))  
+  if (ButtonHit('A'))
   {
     g_Config.MasterTuneOffset = settingUnchanged;
     GoToNextScreen(SETUP_MENU);  // Cancel
@@ -1337,7 +1514,7 @@ void UserState_SetMasterTune()
     GoToNextScreen(SETUP_MENU);
   }
 
-  if (doRefresh) 
+  if (doRefresh)
   {
     Disp_SetFont(MONO_16_NORM);
     Disp_PosXY(40, 24);
@@ -1345,7 +1522,7 @@ void UserState_SetMasterTune()
     absValue = (setting >= 0) ? setting : (0 - setting);
     if (setting < 0)  Disp_PutChar('-');
     else if (setting > 0)  Disp_PutChar('+');
-    else  Disp_PutChar(' '); 
+    else  Disp_PutChar(' ');
     Disp_PutDecimal(absValue, 2);
   }
 }
@@ -1354,7 +1531,7 @@ void UserState_SetMasterTune()
 void  UserState_SetVoiceTuning()
 {
   static short setting;  // signed (0 +/- 64)
-  static uint8_t voice;  // Voice-channel selected
+  static uint8_t voice;  // Voice-channel selected  (0..N)
   short  absValue;
   uint8_t offsetVal;  // setting offset by +64
   bool doRefresh = FALSE;
@@ -1417,7 +1594,7 @@ void  UserState_SetVoiceTuning()
   }
   if (ButtonHit('C'))  // Next voice -- last setting not saved
   {
-    if (++voice >= NUMBER_OF_VOICES) voice = 0;
+    if (++voice >= TOTAL_NUMBER_OF_VOICES) voice = 0;
     setting = g_Config.VoiceTuning[voice] - 64;  // +/-64
     g_VoiceUnderTest = voice;
     doRefresh = TRUE;
@@ -1549,7 +1726,7 @@ void  UserState_Set_LFO_Depth()
   if (ButtonHit('A'))  GoToNextScreen(HOME_SCREEN);
   if (ButtonHit('B'))  GoToNextScreen(SET_LFO_RAMP);
   if (ButtonHit('C'))  GoToNextScreen(PATCH_MENU);
-  
+
   if (doRefresh)
   {
     Disp_SetFont(MONO_16_NORM);
@@ -1978,19 +2155,19 @@ void  UserState_Set_LimiterLevel()
 // Function renders a dotted line horizontally at the current cursor position (x, y).
 // If length is not a multiple of 8 pix, the length will be truncated to nearest 8 pix.
 //
-void  DrawDottedLineHoriz(uint8_t length)  
+void  DrawDottedLineHoriz(uint8_t length)
 {
   static uint8_t  dots8pix = 0xAA;  // dotted line, w=8, h=1
   uint8_t  xpos = Disp_GetX();
   uint8_t  ypos = Disp_GetY();
   uint8_t  savePosX = xpos;
 
-  while (length >= 8)  
-  { 
+  while (length >= 8)
+  {
     Disp_PosXY(xpos, ypos);
     Disp_PutImage((uint8_t *)&dots8pix, 8, 1);
     xpos += 8;
-    length -= 8; 
+    length -= 8;
   }
   Disp_PosXY(savePosX, ypos);  // restore caller's cursor position
 }
@@ -2037,7 +2214,7 @@ void  UserState_SetMixerLevels()  // Oscillator Mixer Input Levels
     Disp_PutText("OSC");
     Disp_PosXY(0, 10);
     Disp_PutText("Freq");
-    for (osc = 0;  osc < 6;  osc++)  
+    for (osc = 0;  osc < 6;  osc++)
     {
       SliderPotMoved(osc);  // clear 'pot moved' flags
       settingChanged[osc] = FALSE;
@@ -2060,7 +2237,7 @@ void  UserState_SetMixerLevels()  // Oscillator Mixer Input Levels
       if (idx == 0) Disp_PutText("1'2");  // 0.5 x fo
       else if (idx == 2) Disp_PutText("4'3");  // 1.333 x fo
       else if (idx == 3) Disp_PutText("3'2");  // 1.5 x fo
-      else  
+      else
       {
         Disp_SetFont(MONO_8_NORM);
         Disp_PosXY(xpos + 4, 11);
@@ -2071,7 +2248,7 @@ void  UserState_SetMixerLevels()  // Oscillator Mixer Input Levels
     // Draw division lines and labels at levels: 0, 4, 8, 12 & 16
     Disp_SetFont(PROP_8_NORM);
     Disp_Mode(SET_PIXELS);
-    for (idx = 0;  idx < 5;  idx++)  
+    for (idx = 0;  idx < 5;  idx++)
     {
       level = idx * 4;
       ypos = 52 - idx * 8;  // 8 pix per division
