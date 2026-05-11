@@ -1,7 +1,8 @@
 /*
  * File:       m0_synth_engine (.ino)
  *
- * Module:     Sigma-6 sound synthesizer implementation
+ * Module:     Sigma-6 sound synthesizer implementation.
+ *             This file is common to the ItsyBitsy M0 synth and Poly voice modules.
  *
  * Platform:   Adafruit 'ItsyBitsy M0 Express' or compatible (MCU: ATSAMD21G18)
  *
@@ -39,7 +40,8 @@ static fixed_t  m_PitchBendFactor;        // Pitch-Bend factor, normalized, bipo
 
 static fixed_t  m_ENV1_Output;            // Envelope Generator #1 output  (0 ~ 1.0)
 static fixed_t  m_ENV2_Output;            // Envelope Generator #2 output  (0 ~ 1.0)
-static fixed_t  m_ContourOutput;          // Contour EG output, normalized (0 ~ 1.0)
+static fixed_t  m_ContourOutputPos;       // Contour EG output, normalized (0 ~ 1.0)
+static fixed_t  m_ContourOutputNeg;       // Contour EG output, inverted   (0 ~ 1.0)
 static fixed_t  m_KeyVelocity;            // Note-On Velocity, normalized  (0 ~ 1.0)
 static bool     m_TriggerAttack1;         // Signal to put ENV1 into attack
 static bool     m_TriggerRelease1;        // Signal to put ENV1 into release
@@ -48,7 +50,8 @@ static bool     m_TriggerRelease2;        // Signal to put ENV2 into release
 static bool     m_TriggerContour;         // Signal to start Contour generator
 static bool     m_TriggerReset;           // Signal to reset Contour generator
 static bool     m_LegatoNoteChange;       // Signal Legato note change to Vibrato func.
-static uint8_t  m_NoteOn;                 // TRUE if Note ON, ie. "gated", else FALSE
+static bool     m_HoldSustainActive;      // TRUE => Hold ENV1 in Sustain state
+static uint8_t  m_NoteOn;                 // TRUE if Note ON, i.e. "gated", else FALSE
 static uint8_t  m_NotePlaying;            // MIDI note number of note playing
 
 static int      m_RvbDelayLen;            // Reverb. delay line length (samples)
@@ -132,6 +135,7 @@ void  SynthPrepare()
     SPI_setupDone = TRUE;
   }
 
+  m_HoldSustainActive = 0;  // Cancel Hold/Sustain
   m_NoteOn = FALSE;       // No note playing
   m_TriggerRelease1 = 1;  // Reset ENV1
   m_TriggerRelease2 = 1;  // Reset ENV2
@@ -253,6 +257,13 @@ void  SynthTriggerRelease()
   m_TriggerRelease2 = 1;
   m_TriggerReset = 1;
   m_NoteOn = FALSE;
+}
+
+
+void  SynthSetHoldSustain(uint8_t state)
+{
+  if (state == 0) m_HoldSustainActive = FALSE;  // Cancel Hold/Sustain
+  else  m_HoldSustainActive = TRUE;  // Assert Hold/Sustain state
 }
 
 
@@ -424,7 +435,7 @@ void  AmpldEnvelopeGenerator()
     EnvSegment = ENV_ATTACK;
   }
 
-  if (m_TriggerRelease1)
+  if (m_TriggerRelease1 && !m_HoldSustainActive)
   {
     m_TriggerRelease1 = 0;
     timeConstant = g_Patch.EnvReleaseTime / 5;
@@ -587,7 +598,8 @@ void   TransientEnvelopeGen()
  * Overview:  Routine called by the Synth Process at 1ms intervals.
  *            All segments of the Contour shape are linear time-varying.
  *
- * Output:    (fixed_t) m_ContourOutput = output signal, normalized (0..+1.00)
+ * Output:    (fixed_t) m_ContourOutputPos = output signal, normalized (0..+1.00)
+ *            (fixed_t) m_ContourOutputNeg = output signal, inverted (0..+1.00)
  */
 void  ContourGenerator()
 {
@@ -602,7 +614,8 @@ void  ContourGenerator()
     m_TriggerContour = 0;
     startLevel = IntToFixedPt(g_Patch.ContourStartLevel) / 100;
     holdLevel = IntToFixedPt(g_Patch.ContourHoldLevel) / 100;
-    m_ContourOutput = startLevel;
+    m_ContourOutputPos = startLevel;
+    m_ContourOutputNeg = holdLevel;
     outputDelta = (holdLevel - startLevel) / g_Patch.ContourRampTime;
     segmentTimer = 0;
     contourSegment = CONTOUR_DELAY;
@@ -634,12 +647,17 @@ void  ContourGenerator()
   {
     if (++segmentTimer >= g_Patch.ContourRampTime)  // Ramp segment ended
       contourSegment = CONTOUR_HOLD;
-    else  m_ContourOutput += outputDelta;
+    else  
+    {
+        m_ContourOutputPos += outputDelta;
+        m_ContourOutputNeg -= outputDelta;
+    }
     break;
   }
   case CONTOUR_HOLD:  // Hold constant level - waiting for Note-Off event to reset
   {
-    m_ContourOutput = holdLevel;
+    m_ContourOutputPos = holdLevel;
+    m_ContourOutputNeg = startLevel;
     break;
   }
   };  // end switch
@@ -725,8 +743,8 @@ void   AudioLevelController()
  * Function:     Synth LFO implementation.
  *
  * Called by SynthProcess() at 1ms intervals, this function generates a sinusoidal
- * waveform in real time.  LFO frequency is a patch parameter, unsigned 8-bit value
- * LFO freq x10, range 1..250 => 0.1 to 25 Hz.
+ * waveform in real time.  LFO frequency is a patch parameter, g_Patch.LFO_Freq_x10,
+ * an unsigned 8-bit value = LFO freq * 10 Hz, range 1..250 => 0.1 to 25 Hz.
  *
  * See also OscFreqModulation() function which updates the input variable m_LFO_Step.
  * Effective sample rate (Fs) is 1000 Hz.
@@ -913,9 +931,9 @@ void  OscAmpldModulation()
   {
     // Determine Ampld Modulation factor for each oscillator
     if (g_Patch.OscAmpldModSource[osc] == OSC_MODN_SOURCE_CONT_POS)
-      v_OscAmpldModn[osc] = m_ContourOutput >> 10;  // 0..1024
+      v_OscAmpldModn[osc] = m_ContourOutputPos >> 10;  // 0..1024
     else if (g_Patch.OscAmpldModSource[osc] == OSC_MODN_SOURCE_CONT_NEG)
-      v_OscAmpldModn[osc] = 1024 - (m_ContourOutput >> 10);  // 1024..0
+      v_OscAmpldModn[osc] = m_ContourOutputNeg >> 10;  // 1024..0
     else if (g_Patch.OscAmpldModSource[osc] == OSC_MODN_SOURCE_ENV2)
       v_OscAmpldModn[osc] = m_ENV2_Output >> 10;  // 0..1024
     else if (g_Patch.OscAmpldModSource[osc] == OSC_MODN_SOURCE_MODN)

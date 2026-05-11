@@ -1,15 +1,17 @@
 /*
  * File:       Sigma_6_Poly_voice (.ino)
  *
- * Project:    Sigma-6 Voice Module for Polyphonic Instrument (no display)
+ * Project:    Sigma-6 Voice Module for Polyphonic synth. (no display, no EEPROM)
  *
  * Platform:   RobotDyn SAMD21 M0-MINI dev board (MCU: ATSAMD21G18)
+ *             <!> In Arduino IDE, select board type: "Arduino Zero (Native USB)"
  *
  * Author:     M.J.Bauer, 2025 -- www.mjbauer.biz
  *
  * Licence:    Open Source (Unlicensed) -- free to copy, distribute, modify
  *
- * Version:    1.5  25-OCT-2025  (See Revision History file)
+ * Version:    1.8  11-05-2026   (See Revision History file)
+ *             Now supports "Mono-voice" mode for Multi-timbral operation.
  */
 #include <fast_samd21_tc3.h>
 #include <Wire.h>
@@ -24,9 +26,12 @@
 void  TC3_Handler(void);       // Audio ISR - defined in "m0_synth_engine"
 
 ConfigParams_t  g_Config;      // structure holding config param's
-uint8_t  g_MidiChannel;        // 1..16  (16 = broadcast, omni)
-uint8_t  g_MidiMode;           // OMNI_ON_MONO or OMNI_OFF_MONO
-uint8_t  g_MidiRegisParam;     // Registered Param # (0: PB range, 1: Fine Tuning)
+
+uint8_t  voiceChannel;         // MIDI channel DIP-switch setting: 1..15
+uint8_t  midiRegstParam;       // Registered Param # (0: PB range, 1: Fine Tuning)
+uint8_t  midiMessageFlag;      // Signal MIDI RX activity (for debug purposes)
+bool     isMonoVoice;          // TRUE if voice channel is independent of Poly Master
+bool     isBroadcast;          // TRUE if last received MIDI message is broadcast
 
 //---------------------------------------------------------------------------------------
 //
@@ -50,10 +55,7 @@ void  setup()
   if (digitalRead(CHAN_SWITCH_S2) == HIGH)  channelSwitches += 2;
   if (digitalRead(CHAN_SWITCH_S3) == HIGH)  channelSwitches += 4;
   if (digitalRead(CHAN_SWITCH_S4) == HIGH)  channelSwitches += 8;
-  
-  g_MidiChannel = channelSwitches;
-  if (channelSwitches == 0)  g_MidiMode = OMNI_ON_MONO;
-  else  g_MidiMode = OMNI_OFF_MONO;
+  voiceChannel = channelSwitches;
 
   Serial1.begin(31250);        // initialize UART for MIDI IN
   Wire.begin();                // initialize IIC as master
@@ -72,6 +74,7 @@ void  setup()
 void  loop()
 {
   static uint32_t last_millis;
+  static uint32_t TXLED_ONtime_begin;
 
   MidiInputService();
 
@@ -80,6 +83,19 @@ void  loop()
     last_millis = millis();
     SynthProcess();
   }
+  
+/***  Debug usage only ...
+
+  if (midiMessageFlag)
+  {
+    TXLED_ONtime_begin = millis();
+    GPIOA_PIN_SET_LOW(TX_LED);  // TX LED On
+    midiMessageFlag = 0;
+  }
+
+  if ((millis() - TXLED_ONtime_begin) >= 100)  // ON-time expired
+    GPIOA_PIN_SET_HIGH(TX_LED);  // TX LED Off
+***/	
 }
 
 
@@ -97,24 +113,21 @@ void  PresetSelect(uint8_t preset)
     memcpy(&g_Patch, &g_PresetPatch[preset], sizeof(PatchParamTable_t));
     SynthPrepare();
     g_Config.PresetLastSelected = preset;
-//  StoreConfigData();  // Sigma-6 Poly Voice has NO EEPROM!
   }
 }
 
 
-/*`````````````````````````````````````````````````````````````````````````````````````````````````
+/*```````````````````````````````````````````````````````````````````````````````````````
  * Function:  MidiInputService()
  *
  * MIDI IN service routine, executed frequently from within main loop.
  * This routine monitors the serial MIDI INPUT stream and whenever a complete message is
  * received, it is processed.
  *
- * The synth module responds to valid messages addressed to the configured MIDI IN channel and,
- * if MIDI mode is set to 'Omni On' (channel-select switches set to 0), it will respond to all
- * messages received, regardless of which channel(s) the messages are addressed to.
- * The module also responds to valid messages addressed to channel 16, regardless of the channel
- * switch setting, so that the host controller can transmit a "broadcast" message to all modules
- * on the MIDI network simultaneously.
+ * The module responds to valid messages addressed to the configured MIDI IN channel.
+ * The module also responds to valid messages addressed to channel 16, regardless of the 
+ * channel switch setting, so that the host controller can transmit a "broadcast" message
+ * to all modules on the "MIDI bus" simultaneously.
  */
 void  MidiInputService()
 {
@@ -122,65 +135,55 @@ void  MidiInputService()
   static  short  msgBytesExpected;
   static  short  msgByteCount;
   static  short  msgIndex;
-  static  uint8_t  msgStatus;     // last command/status byte rx'd
-  static  bool   msgComplete;   // flag: got msg status & data set
+  static  uint8_t  msgStatus;  // last command/status byte rx'd
+  static  uint8_t  msgChannel;  // 1..16 ! (0 = invalid, 16 = broadcast)
+  static  bool   runningStatus;  // flag: got msg status & data set
 
   uint8_t  msgByte;
-  uint8_t  msgChannel;  // 1..16 !
+  
   BOOL     gotSysExMsg = FALSE;
 
   if (Serial1.available() > 0)  // unread byte(s) available in Rx buffer
   {
     msgByte = Serial1.read();
 
-    if (msgByte & 0x80)  // command/status byte received (bit7 High)
+    if ((msgByte & 0x80) && msgByte < 0xF0)  // command/status byte
     {
-      if (msgByte == SYSTEM_MSG_EOX)
-      {
-        msgComplete = TRUE;
-        gotSysExMsg = TRUE;
-        midiMessage[msgIndex++] = SYSTEM_MSG_EOX;
-        msgByteCount++;
-      }
-      else if (msgByte <= SYS_EXCLUSIVE_MSG)  // Ignore Real-Time messages
-      {
         msgStatus = msgByte;
-        msgComplete = FALSE;  // expecting data byte(s))
+        msgChannel = (msgStatus & 0x0F) + 1;  // 1..16
+        if (msgChannel == 16) isBroadcast = TRUE;
+        else  isBroadcast = FALSE;
+        runningStatus = FALSE;  // expecting data byte(s)
+    }
+
+    if (msgChannel == voiceChannel || isBroadcast)
+    {
+      if ((msgByte & 0x80) && msgByte < 0xF0)  // command/status byte
+      {
         midiMessage[0] = msgStatus;
         msgIndex = 1;
         msgByteCount = 1;  // have cmd already
         msgBytesExpected = MIDI_GetMessageLength(msgStatus);
       }
-    }
-    else  // data byte received (bit7 LOW)
-    {
-      if (msgComplete && msgStatus != SYS_EXCLUSIVE_MSG)
+      else if ((msgByte & 0x80) == 0)  // data byte (bit7 = 0)
       {
-        if (msgByteCount == 0)  // start of new data set -- running status
+        if (runningStatus && msgByteCount == 0)  // start new data set
         {
           msgIndex = 1;
-          msgByteCount = 1;
+          msgByteCount = 1;  // have status byte already
           msgBytesExpected = MIDI_GetMessageLength(msgStatus);
         }
+        if (msgIndex < MIDI_MSG_MAX_LENGTH)
+        {
+          midiMessage[msgIndex++] = msgByte;
+          msgByteCount++;
+        }
       }
-      if (msgIndex < MIDI_MSG_MAX_LENGTH)
+      if (msgByteCount != 0 && msgByteCount == msgBytesExpected)
       {
-        midiMessage[msgIndex++] = msgByte;
-        msgByteCount++;
-      }
-    }
-
-    if ((msgByteCount != 0 && msgByteCount == msgBytesExpected) || gotSysExMsg)
-    {
-      msgComplete = TRUE;
-      msgChannel = (midiMessage[0] & 0x0F) + 1;  // 1..16
-
-      if (msgChannel == g_MidiChannel || msgChannel == 16
-      ||  g_MidiMode == OMNI_ON_MONO  || msgStatus == SYS_EXCLUSIVE_MSG)
-      {
+        runningStatus = TRUE;  // have complete message
         ProcessMidiMessage(midiMessage, msgByteCount);
-//      g_MidiRxSignal = TRUE;  // signal to UI (not used in Poly voice)
-        msgBytesExpected = 0;
+        midiMessageFlag = 1;
         msgByteCount = 0;
         msgIndex = 0;
       }
@@ -234,18 +237,14 @@ void  ProcessMidiMessage(uint8_t *midiMessage, short msgLength)
     }
     case PROGRAM_CHANGE_CMD:
     {
-      PresetSelect(program);
+      if (!isMonoVoice) PresetSelect(program);  // case: Poly-voice channel
+      else if (!isBroadcast) PresetSelect(program);  // case: Mono-voice
       break;
     }
     case PITCH_BEND_CMD:
     {
       bipolarPosn = ((short)(leverPosn_Hi << 7) | leverPosn_Lo) - 0x2000;
       SynthPitchBend(bipolarPosn);
-      break;
-    }
-    case SYS_EXCLUSIVE_MSG:
-    {
-      ProcessMidiSystemExclusive(midiMessage, msgLength);
       break;
     }
     default:  break;
@@ -284,16 +283,16 @@ void  ProcessControlChange(uint8_t *midiMessage)
     data14 = (((int) modulationHi) << 7) + dataByte;
     SynthModulation(data14);
   }
-  // The following CC numbers are to set synth Configuration parameters:
+  // The following CC numbers are to set synth configuration parameters:
   // ```````````````````````````````````````````````````````````````````
   else if (CCnumber == 100)  // MIDI "Registered Parameter" ID
   {
-    g_MidiRegisParam = dataByte; 
+    midiRegstParam = dataByte; 
   }
   else if (CCnumber == 38)  // Parameter "Data Entry" (LSB) message
   {
-    if (g_MidiRegisParam == 0x00 && dataByte <= 12) g_Config.PitchBendRange = dataByte;
-    if (g_MidiRegisParam == 0x01) g_Config.FineTuning_cents = (short)dataByte - 64;
+    if (midiRegstParam == 0x00 && dataByte <= 12) g_Config.PitchBendRange = dataByte;
+    if (midiRegstParam == 0x01) g_Config.FineTuning_cents = (short)dataByte - 64;
   }
   else if (CCnumber == 86)  // Set audio ampld control mode
   {
@@ -315,9 +314,33 @@ void  ProcessControlChange(uint8_t *midiMessage)
       SynthSetReverbMix(dataByte);  // effective immediately
     }
   }
+  // Sigma-6 Poly/Mono voice specific messages
+  // `````````````````````````````````````````
+  if (CCnumber == 64)  // Set ENV1 Hold/Sustain state (on or off)
+  {
+    // Broadcast Hold/Sustain messages are ignored by Mono-voice modules
+    if (!isMonoVoice || !isBroadcast) SynthSetHoldSustain((dataByte >= 64) ? 1 : 0);
+  }
+  else if (CCnumber == 112)  // LFO phase sync
+  {
+    SynthLFO_PhaseSync();  // Data byte ignored.
+  }
+  else if (CCnumber == 113)  // Set 'Mono' (independent) or 'Poly' voice mode
+  {
+    if (dataByte >= 64) isMonoVoice = TRUE;  
+    else  isMonoVoice = FALSE;
+  }
+  else if (CCnumber == 120 || CCnumber == 123)
+  {
+    SynthPrepare();  // All Sound Off & Kill note playing
+  }
+
+  // Mono-voice must reject broadcasts which alter patch parameters
+  if (isMonoVoice && isBroadcast)  return;  
+
   // The following CC numbers are to set synth Patch parameters:
   // ```````````````````````````````````````````````````````````
-  else if (CCnumber == 70)  // Set osc. mixer output gain (unit = 0.1)
+  if (CCnumber == 70)  // Set osc. mixer output gain (unit = 0.1)
   {
     if (dataByte != 0)  g_Patch.MixerOutGain_x10 = dataByte;
   }
@@ -366,31 +389,6 @@ void  ProcessControlChange(uint8_t *midiMessage)
     oscnum = (dataByte >> 4) % 6;  // MS digit (0..5)
     g_Patch.MixerInputStep[oscnum] = dataByte & 0x0F;  // LS digit (0..15)
   }
-  else if (CCnumber == 112)  // LFO phase sync
-  {
-    SynthLFO_PhaseSync();  // Data byte ignored.
-  }
-  // Mode Change messages
-  // ````````````````````````````````````````````````````````````````````````
-  else if (CCnumber == 120 || CCnumber == 123)
-  {
-    SynthPrepare();  // All Sound Off & Kill note playing
-  }
-}
-
-
-/*
- * The "manufacturer ID" (2nd byte of msg) is first validated to ensure the message
- * can be correctly interpreted, i.e. it's a Bauer exclusive message which contains
- * information about a Bauer MIDI controller (e.g. REMI) connected to the MIDI IN port.
- * Byte 3 of the message is a code to identify the type of message content.
- */
-void  ProcessMidiSystemExclusive(uint8_t *midiMessage, short msgLength)
-{
-  if (midiMessage[1] == SYS_EXCL_REMI_ID)  // "Manufacturer ID" match
-  {
-      // Nothing to be done in this version !
-  }
 }
 
 
@@ -413,7 +411,7 @@ int  MIDI_GetMessageLength(uint8_t statusByte)
 
 /*`````````````````````````````````````````````````````````````````````````````````````````````````
  *   Set default values for configuration param's, except those which are assigned values
- *   by reading config switches at start-up, e.g. MIDI channel and mode.
+ *   by reading config switches at start-up, e.g. MIDI channel.
  *   Config param's may be changed subsequently by MIDI CC messages from the Master board.
  *
  *   Options for AudioAmpldCtrlMode, VibratoCtrlMode, PitchBendMode and MasterTuneOffset
@@ -422,8 +420,8 @@ int  MIDI_GetMessageLength(uint8_t statusByte)
 void  DefaultConfigData(void)
 {
   g_Config.AudioAmpldCtrlMode = AUDIO_CTRL_ENV1_VELO;
-  g_Config.VibratoCtrlMode = VIBRATO_DISABLED;
-  g_Config.PitchBendMode = PITCH_BEND_BY_MIDI_MSG;
+  g_Config.VibratoCtrlMode = VIBRATO_AUTOMATIC;
+  g_Config.PitchBendMode = PITCH_BEND_DISABLED;
   g_Config.PitchBendRange = 2;         // semitones (max. 12)
   g_Config.ReverbMix_pc = 15;          // 0..100 % (typ. 15)
   g_Config.PresetLastSelected = 1;     // user preference
@@ -577,15 +575,15 @@ const  PatchParamTable_t  g_PresetPatch[] =
     7, 0,                           // Mixer Gain x10, Limit %FS
   },
   {
-    "Rock Organ #3",                // 10  (aka 'Rock Organ #3')
-    { 0, 3, 1, 4, 6, 8 },           // Osc Freq Mult index (0..11)
-    { 0, 0, 0, 0, 0, 0 },           // Osc Ampld Modn src (0..9)
-    { 0, 0, -6, -7, 0, 0 },         // Osc Detune cents (+/-600)
-    { 13, 13, 13, 13, 0, 0 },       // Osc Mixer levels (0..16)
-    10, 0, 400, 100, 300, 2,        // Amp Env (A-H-D-S-R), Amp Mode
-    5, 20, 600, 40,                 // Contour Env (S-D-R-H)
-    500, 50,                        // ENV2: Dec, Sus %
-    70, 500, 30, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    "Keith Emerson Organ",          // 10 (Alt.)
+    { 0, 3, 1, 4, 5, 6 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 3, 3 },           // Osc Ampld Modn source (0..9)
+    { -3, 3, 0, -3, 3, 0 },         // Osc Detune, cents (+/-600)
+    { 12, 12, 12, 12, 12, 10 },     // Osc Mixer level/step (0..16)
+    20, 0, 5, 100, 300, 2,          // Ampld Env (A-H-D-S-R), Amp Mode
+    0, 50, 300, 100,                // Contour Env (S-D-R-H)
+    700, 35,                        // ENV2: Decay/Rel, Sus %
+    70, 300, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
     7, 0,                           // Mixer Gain x10, Limit %FS
   },
   {
@@ -686,15 +684,15 @@ const  PatchParamTable_t  g_PresetPatch[] =
     33, 50,                         // Mixer Gain x10, Limit %FS
   },
   {
-    "Bellbird  (JPM)",              // 19  (created by JPM)
-    { 9, 5, 8, 1, 8, 5 },           // Osc Freq Mult index (0..11)
-    { 7, 3, 3, 3, 7, 7 },           // Osc Ampld Modn source (0..7)
+    "Bellbird Recall",              // 19  (alt. revised)
+    { 4, 6, 7, 8, 9, 10 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 3, 3, 3 },           // Osc Ampld Modn source (0..7)
     { 0, 0, 0, 0, 0, 0 },           // Osc Detune cents (+/-600)
-    { 4, 8, 2, 10, 14, 15 },        // Osc Mixer level/step (0..16)
-    70, 50, 100, 50, 700, 2,        // Ampld Env (A-H-D-S-R), Amp Mode
+    { 0, 8, 12, 12, 12, 8 },        // Osc Mixer level/step (0..16)
+    50, 20, 3000, 0, 2000, 2,       // Ampld Env (A-H-D-S-R) - Bell
     0, 200, 500, 100,               // Contour Env (S-D-R-H)
-    3000, 50,                       // ENV2: Dec, Sus %
-    30, 70, 40, 35,                 // LFO: Hz x10, Ramp, FM %, AM %
+    2000, 50,                       // ENV2: Dec, Sus %
+    200, 50, 60, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
     7, 0,                           // Mixer Gain x10, Limit %FS
   },
   {
@@ -834,15 +832,401 @@ const  PatchParamTable_t  g_PresetPatch[] =
   {
     "Deep Saxophoney",              // 31
     { 0, 1, 4, 5, 6, 7 },           // Osc Freq Mult index (0..11)
-    { 5, 0, 5, 0, 5, 5 },           // Osc Ampld Modn source (0..9)
+    { 5, 0, 5, 4, 5, 4 },           // Osc Ampld Modn source (0..9)
     { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
-    { 9, 10, 13, 0, 13, 12 },       // Osc Mixer level/step (0..16)
+    { 13, 10, 10, 10, 11, 9 },      // Osc Mixer level/step (0..16)
     70, 0, 200, 80, 200, 3,         // Ampld Env (A-H-D-S-R), Amp Mode
     0, 50, 300, 100,                // Contour Env (S-D-R-H)
     500, 50,                        // ENV2: Decay/Rel, Sus %
     50, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
-    20, 50,                         // Mixer Gain x10, Limit %FS
+    25, 40,                         // Mixer Gain x10, Limit %FS
   },
+  // ============  Banks 3 & 4 (32 Presets) added in version 3.0  =============
+  //         ( See project web page for explanation of nomenclature. )
+  {
+    "Pink No Osc AM",               // 32  Fender Rhodes ripoff
+    { 1, 4, 5, 6, 7, 8 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 14, 12, 10, 0, 0, 6  },       // Osc Mixer level/step (0..16)
+    20, 70, 1500, 0, 300, 2,        // Ampld Env (A-H-D-S-R) - Piano
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) - Med 100
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 500, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Pink Modn Osc 3 & 4",          // 33
+    { 1, 4, 5, 6, 7, 8 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 4, 4, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 10, 11, 11, 12, 8 },      // Osc Mixer level/step (0..16)
+    10, 100, 2000, 0, 2000, 2,      // Ampld Env (A-H-D-S-R) - Bell
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) - Med 100
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Pink Modn Osc 3 & 5",          // 34
+    { 1, 4, 5, 6, 7, 8 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 4, 0, 4, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 12, 11, 11, 11, 9 },      // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R) - Organ
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) - Med 100
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    60, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Pink Contour 3 & 5",           // 35
+    { 1, 4, 5, 6, 7, 8 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 2, 0, 1, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 6, 13, 8, 13, 0 },        // Osc Mixer level/step (0..16)
+    20, 70, 1500, 0, 300, 2,        // Ampld Env (A-H-D-S-R)
+    20, 50, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    60, 500, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Pink Contour 3,4,5,6",         // 36
+    { 1, 4, 5, 6, 7, 8 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 2, 2, 1, 1 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 14, 12, 12, 12, 12, 12 },     // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R)
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    60, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    7, 0,                           // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Pink Transient 4,5,6",         // 37
+    { 1, 4, 5, 6, 7, 8 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 3, 3, 3 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 8, 12, 10, 12, 10 },      // Osc Mixer level/step (0..16)
+    10, 200, 2000, 4, 700, 2,       // Ampld Env (A-H-D-S-R) - Guitar
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 0,                         // ENV2: Decay/Rel, Sus %
+    60, 500, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Pink Transient 5 & 6",         // 38
+    { 1, 4, 5, 6, 7, 8 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 3, 3 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 8, 9, 8, 12, 12, 12 },        // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R)
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    500, 50,                        // ENV2: Decay/Rel, Sus %
+    60, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    7, 0,                           // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Pink No AM detune 2-6",        // 39
+    { 1, 4, 5, 6, 7, 8 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 6, -6, 6, -6, 6, -6 },        // Osc Detune, cents (+/-600)
+    { 12, 7, 8, 10, 6, 10 },        // Osc Mixer level/step (0..16)
+    10, 200, 2000, 4, 700, 2,       // Ampld Env (A-H-D-S-R)
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Grey No Osc AM",               // 40
+    { 1, 3, 5, 7, 9, 11 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 13, 12, 11, 10, 9, 8 },       // Osc Mixer level/step (0..16)
+    20, 70, 1500, 0, 300, 2,        // Ampld Env (A-H-D-S-R) - Piano
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) - Med 100
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 500, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Grey Modn Osc 3 & 4",          // 41
+    { 1, 3, 5, 7, 9, 11 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 4, 4, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 12, 12, 12, 0, 0 },       // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R)
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Grey Contour 3 & 6",           // 42
+    { 1, 3, 5, 7, 9, 11 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 1, 0, 0, 2 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 10, 0, 12, 9, 10, 10 },       // Osc Mixer level/step (0..16)
+    100, 0, 200, 80, 200, 2,        // Ampld Env (A-H-D-S-R)
+    0, 50, 1000, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Grey Transient 5 & 6",         // 43
+    { 1, 3, 5, 7, 9, 11 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 3, 3 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 11, 8, 8, 0, 10, 10 },        // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R)
+    20, 200, 1000, 80,              // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    60, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Cyan No Osc AM",               // 44
+    { 1, 4, 5, 7, 9, 11 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 10, 6, 0, 6, 5 },         // Osc Mixer level/step (0..16)
+    20, 70, 1500, 0, 300, 2,        // Ampld Env (A-H-D-S-R) - Piano
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) - Med 100
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 500, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Cyan Modn Osc 4,5,6",          // 45
+    { 1, 4, 5, 7, 9, 11 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 4, 4, 4 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 10, 0, 10, 0, 8 },        // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R)
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Cyan Contour Osc 3,6",         // 46
+    { 1, 4, 5, 7, 9, 11 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 1, 0, 0, 2 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 0, 12, 10, 0, 12 },       // Osc Mixer level/step (0..16)
+    100, 0, 200, 80, 200, 2,        // Ampld Env (A-H-D-S-R) - Flute
+    25, 100, 500, 100,              // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    70, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Cyan EG2 5,6  detune",         // 47
+    { 1, 4, 5, 7, 9, 11 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 3, 3 },           // Osc Ampld Modn source (0..9)
+    { 0, -12, 12, -12, 12, 0 },     // Osc Detune, cents (+/-600)
+    { 6, 10, 12, 10, 8, 0 },        // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R)
+    20, 200, 1000, 80,              // Contour Env (S-D-R-H)
+    500, 50,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Yellow No Osc AM",             // 48
+    { 0, 1, 4, 6, 8, 10 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 11, 10, 9, 8, 7 },        // Osc Mixer level/step (0..16)
+    20, 70, 1500, 0, 300, 2,        // Ampld Env (A-H-D-S-R) - Piano
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) - Med 100
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 500, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Yellow Modn Osc 3,4",          // 49
+    { 0, 1, 4, 6, 8, 10 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 4, 4, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 10, 10, 13, 13, 10, 6 },      // Osc Mixer level/step (0..16)
+    10, 100, 2000, 0, 2000, 2,      // Ampld Env (A-H-D-S-R) - Bell
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) - Med 100
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Yellow Modn Osc 3,5",          // 50
+    { 0, 1, 4, 6, 8, 10 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 4, 0, 4, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 12, 12, 12, 12, 7 },      // Osc Mixer level/step (0..16)
+    100, 0, 200, 80, 200, 2,        // Ampld Env (A-H-D-S-R) - Flute
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) - Med 100
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Yellow Contour 4 & 5",         // 51
+    { 0, 1, 4, 6, 8, 10 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 1, 1, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 10, 10, 12, 12, 0 },      // Osc Mixer level/step (0..16)
+    20, 70, 1500, 0, 300, 2,        // Ampld Env (A-H-D-S-R)
+    20, 0, 500, 100,                // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    60, 500, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Yellow Contour 3..6",          // 52
+    { 0, 1, 4, 6, 8, 10 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 2, 2, 1, 1 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 10, 12, 10, 12, 12 },     // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R)
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    60, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Yellow Transient 4-6",         // 53
+    { 0, 1, 4, 6, 8, 10 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 3, 3, 3 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 10, 10, 10, 10, 12, 10 },     // Osc Mixer level/step (0..16)
+    10, 200, 2000, 4, 700, 2,       // Ampld Env (A-H-D-S-R) - Guitar
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Yellow Transient 5,6",         // 54
+    { 0, 1, 4, 6, 8, 10 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 3, 3 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 10, 12, 12, 11, 12, 10 },     // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R)
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    500, 50,                        // ENV2: Decay/Rel, Sus %
+    60, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Yellow No AM, detune",         // 55
+    { 0, 1, 4, 6, 8, 10 },          // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, -6, 6, -6, 6, -6 },        // Osc Detune, cents (+/-600)
+    { 12, 11, 10, 9, 8, 7 },        // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R) - Organ
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    70, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Orange No Osc AM",             // 56
+    { 0, 3, 5, 6, 8, 9 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 13, 12, 11, 10, 9 },      // Osc Mixer level/step (0..16)
+    20, 70, 1500, 0, 300, 2,        // Ampld Env (A-H-D-S-R) - Piano
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) 
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 500, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Orange Modn Osc 5 & 6",        // 57
+    { 0, 3, 5, 6, 8, 9 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 4, 4 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 10, 10, 10, 10, 13, 13 },     // Osc Mixer level/step (0..16)
+    100, 0, 200, 80, 200, 2,        // Ampld Env (A-H-D-S-R) - Flute
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Orange Contour+ 3, 4",         // 58
+    { 0, 3, 5, 6, 8, 9 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 1, 1, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 10, 0, 12, 0, 6 },        // Osc Mixer level/step (0..16)
+    20, 70, 1500, 0, 300, 2,        // Ampld Env (A-H-D-S-R) - Piano
+    10, 50, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Orange Contour 3 & 6",         // 59
+    { 0, 3, 5, 6, 8, 9 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 1, 0, 0, 2 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 0, 12, 10, 0, 12 },       // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R) - Organ
+    10, 50, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    70, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Green No Osc AM",              // 60
+    { 1, 2, 3, 4, 5, 7 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 12, 0, 10, 10, 6, 5 },        // Osc Mixer level/step (0..16)
+    20, 70, 1500, 0, 300, 2,        // Ampld Env (A-H-D-S-R) - Piano
+    0, 100, 500, 100,               // Contour Env (S-D-R-H) - Med 100
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 500, 0, 0,                  // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Green Modn Osc 4 & 6",         // 61
+    { 1, 2, 3, 4, 5, 7 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 4, 0, 4 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 13, 0, 11, 13, 0, 0 },        // Osc Mixer level/step (0..16)
+    100, 0, 200, 80, 200, 2,        // Ampld Env (A-H-D-S-R) - Flute
+    0, 100, 500, 100,               // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    50, 200, 10, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Green Contur Osc 3-6",         // 62
+    { 1, 2, 3, 4, 5, 7 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 2, 2, 1, 1 },           // Osc Ampld Modn source (0..9)
+    { 0, 0, 0, 0, 0, 0 },           // Osc Detune, cents (+/-600)
+    { 6, 0, 10, 10, 8, 8 },         // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R) - Organ
+    10, 200, 1000, 100,             // Contour Env (S-D-R-H)
+    200, 25,                        // ENV2: Decay/Rel, Sus %
+    70, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  },
+  {
+    "Green EG2 5,6 detune",         // 63
+    { 1, 2, 3, 4, 5, 7 },           // Osc Freq Mult index (0..11)
+    { 0, 0, 0, 0, 3, 3 },           // Osc Ampld Modn source (0..9)
+    { 0, -12, 12, -12, 12, 0 },     // Osc Detune, cents (+/-600)
+    { 13, 0, 0, 10, 10, 9 },        // Osc Mixer level/step (0..16)
+    10, 0, 400, 100, 300, 2,        // Ampld Env (A-H-D-S-R) - Organ
+    20, 200, 1000, 80,              // Contour Env (S-D-R-H)
+    1000, 5,                        // ENV2: Decay/Rel, Sus %
+    70, 500, 20, 0,                 // LFO: Hz x10, Ramp, FM %, AM %
+    10, 0,                          // Mixer Gain x10, Limit %FS
+  }
 };
 
 
