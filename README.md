@@ -15,12 +15,12 @@ Download and install the latest version of Arduino IDE on your PC and follow the
 Install the __Adafruit SAMDxx Boards Manager__. When you connect a board to your computer, Arduino IDE tries to determine
 the board type automatically, but in any case be sure to select the correct board type as follows...
 
-To compile the code for the Master Controller, select board type __ItsyBitsy M0 Express)__ regardless of the actual
+To compile the code for the Master Controller, select board type __ItsyBitsy M0 Express (SAMD21)__ regardless of the actual
 MCU type fitted (Robotdyn SAMD21 Mini). This is necessary because the Arduino Zero (Native USB) board package does not
 support analog inputs A8, A9, A11, etc. However, these analog pins are supported by the Adafruiit SAMD21 M0 board package.
 
 To compile the code for the Poly-voice Modules, select board type __Arduino Zero (Native USB)__.  This is preferable
-to the Adafruit M0 Express option, especially for the Poly-voice firmware, because the Arduino Zero startup code enables
+to the Adafruit M0 Express option because the Arduino Zero startup code enables
 the 32.768kHz crystal oscillator for the MCU system clock. The Adafruit ItsyBitsy M0 board uses the MCU internal 8MHz 
 RC oscillator which is not as precise or stable.
 
