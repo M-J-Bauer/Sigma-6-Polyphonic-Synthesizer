@@ -55,15 +55,39 @@ because the core start-up code utilizes the 32.768kHz crystal for the MCU
 system clock.  [See additional note at end of document.]
 
 
+v1.6  31-JAN-2026  (interim revision, not released)
+`````````````````
+Fixed bug in Contour EG:  Added inverse output signal.  [check!]
+
+Replaced preset #10 with "Keith Emerson Organ" (was "Rock Organ #3").. 
+Modified preset #19 "Bellbird" -- now "Bellbird Recall" -- no improvement!
 
 
---------------------------------------------------------------------------------
+v1.7  05-FEB-2026  (interim revision, not released)
+`````````````````
+Added MIDI message type (CC113) to configure modules to distinguish Poly voices
+from independent Mono voices.
 
-To Do:  
-```````
-> Refine Preset 31 "Deep Sax" - make similar to Bass Overdrive (add expression).
+Added MIDI message type (CC64) to activate/cancel HOLD/Sustain mode.
 
-> Refine (or replace) "Bellbird" and other presets (see comments in code).
+Mono voices will not respond to *broadcast* messages of the following types:
+  * Program Change;  
+  * Control Change: Sound Controllers (to set patch parameter).
+
+All voices respond to messages addressed to their unique MIDI channel.
+
+<!> Found bug in MIDI service routine which caused intermittent failure to 
+    receive messages... (Uninitialized variable! No warning from compiler.)
+
+
+v1.8  11-MAY-2026  (Release on GitHub)
+``````````````````````````````````````
+Fixed bug in MIDI service routine.
+
+Added presets 32 ~ 63.  See project web-page for details.
+
+Tested OK with Master Controller v1.2.
+
 
 
 ________________________________________________________________________________

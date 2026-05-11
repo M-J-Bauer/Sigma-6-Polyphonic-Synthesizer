@@ -145,49 +145,41 @@ Use 'Data Entry Pot' to adjust LFO _Patch_ param's, to make persistent.
 Added 'Master Tune' UI function & MIDI support for Master Tune param.
 
 
-v1.00  22-11-2025  [released to GitHub]
-```````````````````````````````````````
+v1.00  22-NOV-2025  [released to GitHub]
+`````````````````````````````````````````
 If LFO Depth is adjusted using LFO Depth pot, maximum value is 100 cents;
 otherwise, max. is 200 cents.
 
-Fix a bug in 'Master Tune' UI screen: The word "cents" was partly erased.
+Fixed a bug in 'Master Tune' UI screen: The word "cents" was partly erased.
 
 
+v1.10  11-FEB-2026  (not released -- to be tested)
+``````````````````````````````````````````````````
+Added "Multi-timbral" mode for use with DAW/sequencer or "split" keyboard.
+Added SETUP screen "Voice Config" to set number of Poly voices and assign
+preset selections to the "Mono-voices".
 
---------------------------------------------------------------------------------
+Voices with MIDI channel number set below or equal to this number will be 
+handled as members of a polyphonic group.  Voice modules with higher MIDI 
+channels will be handled as independent monophonic voices, each of which can
+be set up with a different preset. Mono-voices can have presets assigned
+via MIDI 'Program Change' messages addressed to their individual channels.
 
-To Do:  
-```````
-> Add 32 more presets to provide a methodical selection of various patch 
-  parameters not adjustable from the Master controller; i.e:
-  Osc. freq mult. (x6), Osc. modulation source (x6), Osc. Detune (x6).
-  Other preset param's set to "typical" values, but these are adjustable
-  anyway via the Master front-panel user-interface or by MIDI CC messages.
+Added HOLD/Sustain function.  Controlled by ext switch/pedal or MIDI message
+type CC64 (data value < 64 turns sustain off;  value >= 64 turns sustain on).
 
-> Add PATCH screens to adjust Contour Env (Slope & Ramp time), Transient Env
-  (Decay time and Sustain level) and LFO AM Depth parameters.
+When HOLD is activated, the Amplitude Envelope (ENV1) stays in the Sustain
+phase. The envelope generator will not enter the Release phase until HOLD/
+Sustain mode is turned off.
 
-> Add LFO synchronization option -- keep all voices LFOs in phase.
 
-> Add HOLD (sustain) function... control by ext. switch/pedal or MIDI msg.
+v1.20  11-MAY-2026  (Release on GitHub)
+````````````````````````````````````````
+Added presets 32 ~ 63.  See project web-page for details.
 
-  When HOLD is activated, all voices ENV Sustain level is set to 70% (TBD) 
-  and Release time is set to 2000ms (TBD). When HOLD is de-activated, 
-  all voices ENV Sustain and Release param's are restored to Preset levels.
-  Voice ENV param changes are temporary only... the master Patch param's
-  are not changed by the Hold/Sustain function.
+Note: Multi-timbral operation and Hold/Sustain function require voice modules
+      to be updated with Poly-voice firmware v1.8.
 
-> Add "multi-timbral" option -- for use with DAW/sequencer, as follows:
-
-  Provide extra SETUP screen "VOICE CONFIG." to set number of Poly voices.
-  Voice modules with MIDI channel set below or equal to this number will be 
-  handled as members of a polyphonic group.  Voice modules with higher MIDI 
-  channel will be handled as independent monophonic voices, each of which can
-  be configured with a different sound preset (via MIDI Program Change).
-
-  MIDI voice messages addressed to the MIDI "basic" channel (Master) will be 
-  processed in polyphonic mode. Otherwise, MIDI messages will be passed through
-  to monophonic voices with MIDI channel corresponding to the message address.
 
 
 ________________________________________________________________________________
