@@ -181,6 +181,24 @@ Note: Multi-timbral operation and Hold/Sustain function require voice modules
       to be updated with Poly-voice firmware v1.8.
 
 
+-----------------------------------
+
+<!> Defect found in v1.20:
+``````````````````````````
+In the UI screen 'MIDI Channel' (select), a data entry value of zero 
+(knob fully anticlockwise) will display "Omni On".  This is incorrect.
+
+The Poly Sigma-6 does not support MIDI 'Omni On' mode, because this mode is
+incompatible with Multi-timbral operation where there could be mono voices 
+set up independent of the Poly voices.  In such a setup, if the Master was in
+Omni mode, any message addressed to a mono voice would also be received and
+actioned by the Master Controller, thereby adversely affecting operation of 
+one or more Poly voices.
+
+This defect will be fixed in the next firmware update.  Meanwhile, the
+obvious work-around is to avoid setting the Master MIDI channel to zero.
+The Master will not respond to MIDI messages addressed to channel zero.
+
 
 ________________________________________________________________________________
 
